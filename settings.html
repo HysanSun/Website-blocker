@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings</title>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --accent-color: #e67e22;
+            --success-color: #27ae60;
+            --danger-color: #e74c3c;
+            --bg-light: #f8f9fa;
+            --bg-card: #ffffff;
+            --border-color: #ecf0f1;
+            --text-muted: #95a5a6;
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html { background: #eef1f5; }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: #eef1f5;
+            color: var(--primary-color);
+            min-height: 100vh;
+            padding: 24px 16px 40px;
+        }
+
+        .container { max-width: 468px; margin: 0 auto; }
+
+        /* --- Header --- */
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .back-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 1.5px solid #dcdde1;
+            background: white;
+            color: var(--primary-color);
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .back-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
+        .header h1 { font-size: 1.3rem; font-weight: 700; }
+
+        /* --- Cards --- */
+        .card {
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            padding: 18px 20px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+            border: 1px solid var(--border-color);
+        }
+        .card h2 {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        /* --- Rule Items --- */
+        .rule-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-color);
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .rule-item:last-child { border-bottom: none; }
+
+        .rule-type-badge {
+            display: inline-block;
+            padding: 2px 9px;
+            border-radius: 20px;
+            font-size: 0.66rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+        .badge-block { background: #fde8e8; color: var(--danger-color); }
+        .badge-timed { background: #fef3e4; color: var(--accent-color); }
+
+        .rule-domain {
+            font-weight: 600;
+            font-size: 0.85rem;
+            flex: 1;
+            min-width: 100px;
+            word-break: break-all;
+        }
+        .rule-limit { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
+
+        .rule-delete-btn {
+            padding: 4px 12px;
+            border: 1px solid #ddd;
+            border-radius: var(--radius-sm);
+            background: white;
+            color: var(--danger-color);
+            font-size: 0.72rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .rule-delete-btn:hover {
+            background: var(--danger-color);
+            color: white;
+            border-color: var(--danger-color);
+        }
+
+        /* --- Usage bar --- */
+        .usage-row {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 2px;
+        }
+        .usage-bar-wrap {
+            flex: 1;
+            height: 5px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .usage-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s;
+        }
+        .usage-bar-fill.normal   { background: var(--success-color); }
+        .usage-bar-fill.warning  { background: var(--accent-color); }
+        .usage-bar-fill.exceeded { background: var(--danger-color); }
+        .usage-text {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            min-width: 75px;
+            text-align: right;
+        }
+        .usage-text.exceeded { color: var(--danger-color); font-weight: 700; }
+
+        /* --- Empty state --- */
+        .empty-state {
+            text-align: center;
+            padding: 16px 0;
+            color: var(--text-muted);
+            font-size: 0.82rem;
+        }
+        .empty-state .icon { font-size: 1.8rem; margin-bottom: 6px; }
+
+        /* --- Add Rule Form --- */
+        .form-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .form-row input {
+            flex: 2;
+            min-width: 160px;
+            padding: 9px 12px;
+            border: 1px solid #ddd;
+            border-radius: var(--radius-sm);
+            font-size: 0.85rem;
+            transition: border-color 0.2s;
+        }
+        .form-row input:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(230,126,34,0.1);
+        }
+        .form-row select {
+            padding: 9px 12px;
+            border: 1px solid #ddd;
+            border-radius: var(--radius-sm);
+            font-size: 0.82rem;
+            background: white;
+            cursor: pointer;
+        }
+
+        #limit-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        #limit-group label {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+        #limit-group input {
+            width: 64px;
+            padding: 9px;
+            border: 1px solid #ddd;
+            border-radius: var(--radius-sm);
+            font-size: 0.85rem;
+            text-align: center;
+        }
+
+        #add-rule-btn {
+            width: 100%;
+            padding: 11px;
+            border: none;
+            border-radius: var(--radius-sm);
+            background: var(--success-color);
+            color: white;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: opacity 0.15s;
+            letter-spacing: 0.5px;
+        }
+        #add-rule-btn:hover { opacity: 0.9; }
+        #add-rule-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* --- Toast --- */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--primary-color);
+            color: white;
+            padding: 10px 22px;
+            border-radius: var(--radius-sm);
+            font-size: 0.8rem;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+        .toast.error { background: var(--danger-color); }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <button id="back-btn" class="back-btn" title="Close">&larr;</button>
+            <h1>Settings</h1>
+        </div>
+
+        <!-- Block Rules List -->
+        <div class="card">
+            <h2>Your Rules</h2>
+            <div id="rules-list">
+                <div class="empty-state">
+                    <div class="icon">&#128683;</div>
+                    <p>No rules configured yet.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Rule -->
+        <div class="card">
+            <h2>Add Rule</h2>
+            <div class="form-row">
+                <input type="text" id="domain-input" placeholder="e.g. youtube.com">
+                <select id="type-select">
+                    <option value="timed">&#9201; Timed</option>
+                    <option value="block">&#128683; Block</option>
+                </select>
+            </div>
+            <div class="form-row" id="limit-group">
+                <label for="limit-input">Daily limit:</label>
+                <input type="number" id="limit-input" value="30" min="1" max="1440">
+                <label for="limit-input">min</label>
+            </div>
+            <button id="add-rule-btn">Add Rule</button>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="settings.js"></script>
+</body>
+</html>

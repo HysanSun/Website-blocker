@@ -1,0 +1,35 @@
+{
+    "manifest_version": 3,
+    "name": "Website Blocker",
+    "version": "1.65",
+    "description": "A strict focus tool to help you separate entertainment from your studying device. It removes distraction and help you maintain the high productivity. The websites are always blocked unless you remove or switch off the extension. However, once you delete the extension, all data loss. Once you switch off or change the access level, the streak backs to 0.          Hysan ",
+    "permissions": [
+      "declarativeNetRequest",
+      "storage"
+    ],
+    "host_permissions": [
+      "<all_urls>"
+    ],
+    "incognito": "spanning", 
+    "icons": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    },
+    "action": {
+      "default_popup": "blockpage.html",
+      "default_icon": "icon.png"
+    },
+    "content_scripts": [
+      {
+        "matches": ["<all_urls>"],
+        "js": ["content.js"],
+        "all_frames": true,
+        "run_at": "document_start",
+        "match_about_blank": true
+      }
+    ],
+    "declarative_net_request": {
+      "rule_resources": []
+    }
+}
