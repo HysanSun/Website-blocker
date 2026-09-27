@@ -7,6 +7,8 @@
 const HEARTBEAT_INTERVAL_MIN = 1;
 const TRACKING_INTERVAL_SEC = 60; // Chrome alarms minimum period is 1 minute
 const TIMED_RULE_ID_OFFSET = 2000000;
+const START_EVENT_GRACE_MS = 1500;            // let onStartup/onInstalled land before judging the streak
+const HEARTBEAT_STALE_LOG_MS = 2 * 60 * 1000; // log a gap past this; never reset on it
 const STORAGE_KEYS = {
   BLOCKED_ITEMS: 'blockedItems',
   DAILY_USAGE: 'dailyUsage',
@@ -14,6 +16,10 @@ const STORAGE_KEYS = {
   LAST_HEARTBEAT: 'lastHeartbeat',
   NEEDS_ALERT: 'needsAlert'
 };
+// Liveness marker in storage.session: it rides out service-worker suspension
+// and system sleep, but is wiped when the extension is disabled/reloaded or
+// the browser restarts.
+const SW_ALIVE_KEY = 'swAlive';
 
 // ============================================================
 // 1. DATA MIGRATION — upgrade old rule format on install/startup
@@ -287,37 +293,73 @@ function getMsUntilMidnight() {
 }
 
 // ============================================================
-// 5. HEARTBEAT & INTEGRITY CHECK (preserved from v1)
+// 5. HEARTBEAT & STREAK INTEGRITY
+//
+// The streak (startDate) is broken by exactly two things:
+//   a) the extension being switched off and back on, or
+//   b) the user pressing "Reset Streak" in the popup.
+//
+// Everything else must leave it alone. The old code reset whenever the gap
+// since the last heartbeat exceeded 61s while the alarm fired every 60s, so
+// ordinary alarm jitter, service-worker recycling, sleep and every browser
+// restart wiped the streak — the day counter could never reach 1.
 // ============================================================
 chrome.alarms.create('heartbeat', { periodInMinutes: HEARTBEAT_INTERVAL_MIN });
 
-async function checkIntegrity() {
-  const now = new Date().getTime();
-
-  const hasPermission = await new Promise(resolve => {
-    chrome.permissions.contains({ origins: ['<all_urls>'] }, resolve);
-  });
-
-  if (!hasPermission) {
-    await chrome.storage.local.set({
-      [STORAGE_KEYS.START_DATE]: now,
-      [STORAGE_KEYS.LAST_HEARTBEAT]: now,
-      [STORAGE_KEYS.NEEDS_ALERT]: true
-    });
-    return;
-  }
-
+// Liveness breadcrumb only. Logs a suspicious gap for diagnostics but
+// deliberately never touches startDate.
+async function heartbeat() {
+  const now = Date.now();
   const { [STORAGE_KEYS.LAST_HEARTBEAT]: lastHb } = await chrome.storage.local.get([STORAGE_KEYS.LAST_HEARTBEAT]);
-  if (lastHb) {
-    const gap = now - lastHb;
-    if (gap > 61000) {
-      await chrome.storage.local.set({
-        [STORAGE_KEYS.START_DATE]: now,
-        [STORAGE_KEYS.NEEDS_ALERT]: true
-      });
-    }
+
+  if (lastHb && now - lastHb > HEARTBEAT_STALE_LOG_MS) {
+    console.debug('[Blocker] Heartbeat gap of', Math.round((now - lastHb) / 1000), 's (streak unaffected)');
   }
+
   await chrome.storage.local.set({ [STORAGE_KEYS.LAST_HEARTBEAT]: now });
+}
+
+// Chrome wakes this worker for several reasons. Two of them mean the user did
+// not switch the extension off: the browser just launched (onStartup), or the
+// extension was installed/updated/reloaded (onInstalled). Chrome fires
+// *nothing* on disable -> enable, which is the case we key the tamper check on.
+let trustedStart = false;
+
+async function breakStreak(reason) {
+  const now = Date.now();
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.START_DATE]: now,
+    [STORAGE_KEYS.LAST_HEARTBEAT]: now,
+    [STORAGE_KEYS.NEEDS_ALERT]: true
+  });
+  console.log('[Blocker] Streak reset —', reason);
+}
+
+async function verifyStreakIntegrity() {
+  try {
+    const now = Date.now();
+
+    // Presence of the session marker means this worker is a revival within the
+    // same extension lifetime. Absent means it was wiped — by a restart (which
+    // trustedStart covers) or by the extension being switched off (which it
+    // does not).
+    const { [SW_ALIVE_KEY]: seenAlive } = await chrome.storage.session.get([SW_ALIVE_KEY]);
+    await chrome.storage.session.set({ [SW_ALIVE_KEY]: now });
+
+    const { [STORAGE_KEYS.START_DATE]: startDate } = await chrome.storage.local.get([STORAGE_KEYS.START_DATE]);
+    if (!startDate) {
+      // Very first run — start the clock; there is nothing to break yet.
+      await chrome.storage.local.set({ [STORAGE_KEYS.START_DATE]: now, [STORAGE_KEYS.LAST_HEARTBEAT]: now });
+      return;
+    }
+
+    if (seenAlive || trustedStart) return;
+
+    await breakStreak('extension was switched off while the browser stayed running');
+  } catch (err) {
+    // Never break a real streak because of an internal error.
+    console.warn('[Blocker] Streak check skipped:', err);
+  }
 }
 
 // ============================================================
@@ -339,7 +381,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // ============================================================
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'heartbeat') {
-    checkIntegrity();
+    heartbeat();
   } else if (alarm.name === 'tracking') {
     trackActiveTab();
   } else if (alarm.name === 'dailyReset') {
@@ -391,19 +433,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // ============================================================
 // 9. STARTUP — initialize everything
 // ============================================================
+let initialized = false;
+
 async function initialize() {
+  // The worker starts for whatever woke it, and a startup event may land on
+  // top of that — re-running this would re-create the alarms and restart
+  // their schedules, so do it once per worker lifetime.
+  if (initialized) return;
+  initialized = true;
+
   console.log('[Blocker] Initializing v2.0...');
 
   // Migrate old data format
   migrateData();
 
-  // Run integrity check
-  await checkIntegrity();
+  // Stamp liveness
+  await heartbeat();
 
   // Sync all DNR rules
   await syncAllRules();
 
-  // Start per-second time tracking
+  // Start per-minute time tracking
   chrome.alarms.create('tracking', { periodInMinutes: TRACKING_INTERVAL_SEC / 60 });
 
   // Schedule daily reset
@@ -418,8 +468,19 @@ async function initialize() {
   console.log('[Blocker] Initialization complete.');
 }
 
-chrome.runtime.onStartup.addListener(initialize);
-chrome.runtime.onInstalled.addListener(initialize);
+chrome.runtime.onStartup.addListener(() => {
+  trustedStart = true;
+  initialize();
+});
 
-// Also run initialize immediately in case SW was just loaded
-initialize();
+chrome.runtime.onInstalled.addListener(() => {
+  trustedStart = true;
+  initialize();
+});
+
+// The worker also starts on its own (alarm, message, browser launch), so always
+// initialize. The streak check waits a beat for the startup events above to
+// land — otherwise a browser restart would look like tampering.
+initialize()
+  .catch(err => console.error('[Blocker] Initialization error:', err))
+  .finally(() => setTimeout(verifyStreakIntegrity, START_EVENT_GRACE_MS));
