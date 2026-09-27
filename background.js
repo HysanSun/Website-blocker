@@ -14,7 +14,8 @@ const STORAGE_KEYS = {
   DAILY_USAGE: 'dailyUsage',
   START_DATE: 'startDate',
   LAST_HEARTBEAT: 'lastHeartbeat',
-  NEEDS_ALERT: 'needsAlert'
+  NEEDS_ALERT: 'needsAlert',
+  HAD_HOST_ACCESS: 'hadHostAccess'
 };
 // Liveness marker in storage.session: it rides out service-worker suspension
 // and system sleep, but is wiped when the extension is disabled/reloaded or
@@ -295,9 +296,10 @@ function getMsUntilMidnight() {
 // ============================================================
 // 5. HEARTBEAT & STREAK INTEGRITY
 //
-// The streak (startDate) is broken by exactly two things:
-//   a) the extension being switched off and back on, or
-//   b) the user pressing "Reset Streak" in the popup.
+// The streak (startDate) is broken by exactly three things:
+//   a) the extension being switched off and back on,
+//   b) the user revoking the extension's site access (<all_urls>), or
+//   c) the user pressing "Reset Streak" in the popup.
 //
 // Everything else must leave it alone. The old code reset whenever the gap
 // since the last heartbeat exceeded 61s while the alarm fired every 60s, so
@@ -347,9 +349,27 @@ async function verifyStreakIntegrity() {
     await chrome.storage.session.set({ [SW_ALIVE_KEY]: now });
 
     const { [STORAGE_KEYS.START_DATE]: startDate } = await chrome.storage.local.get([STORAGE_KEYS.START_DATE]);
+
+    // Host ("site access") permission. Chrome may hand a fresh install
+    // <all_urls> as "when you click the extension", so a plain `false` here is
+    // not evidence of tampering — it is the normal starting state. Only a
+    // true -> false transition counts: access we had was taken away, and the
+    // blocker silently stopped working.
+    const hasHostAccess = await chrome.permissions.contains({ origins: ['<all_urls>'] });
+    const { [STORAGE_KEYS.HAD_HOST_ACCESS]: hadHostAccess } = await chrome.storage.local.get([STORAGE_KEYS.HAD_HOST_ACCESS]);
+
+    if (hasHostAccess !== !!hadHostAccess) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.HAD_HOST_ACCESS]: hasHostAccess });
+    }
+
     if (!startDate) {
       // Very first run — start the clock; there is nothing to break yet.
       await chrome.storage.local.set({ [STORAGE_KEYS.START_DATE]: now, [STORAGE_KEYS.LAST_HEARTBEAT]: now });
+      return;
+    }
+
+    if (!hasHostAccess && hadHostAccess) {
+      await breakStreak('site access was revoked');
       return;
     }
 
