@@ -75,6 +75,12 @@
                 margin-bottom: 18px;
             }
             .popup-only { display: none !important; }
+            .pomodoro-line {
+                display: block;
+                font-size: 0.82rem;
+                color: #7f8c8d;
+                margin: 0 0 12px;
+            }
         }
 
         /* --- Top Bar --- */
@@ -104,6 +110,11 @@
             border-color: var(--accent-color);
             color: var(--accent-color);
         }
+
+        /* --- Focus-session status line (full-page form only) --- */
+        .pomodoro-line { display: none; }
+        .pomodoro-line a { color: var(--accent-color); font-weight: 600; text-decoration: none; }
+        .pomodoro-line a:hover { text-decoration: underline; }
 
         /* --- Manual popup --- */
         .backdrop {
@@ -280,12 +291,14 @@
 
     <!-- Full-page only -->
     <div class="blocked-icon">&#128683;</div>
+    <div id="pomodoro-line" class="pomodoro-line"></div>
     <p class="blocked-title">This site has been blocked to keep you focused.</p>
 
     <!-- Top bar -->
     <div class="top-bar">
         <a href="#manual-window" class="help-btn">?</a>
         <span style="font-size:0.66rem;color:#bdc3c7;letter-spacing:1px;">v2.0</span>
+        <a id="pomodoro-btn" class="settings-btn" title="Pomodoro">&#9201;</a>
         <a id="settings-btn" class="settings-btn" title="Settings">&#9881;</a>
     </div>
 
@@ -337,5 +350,6 @@
 </div>
 
 <script src="streaks.js"></script>
+<script src="pomodoro-entry.js"></script>
 </body>
 </html>

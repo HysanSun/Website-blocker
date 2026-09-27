@@ -2,7 +2,7 @@
 
 > **读者：接手这个仓库的下一个 AI 会话。**
 > 读完这一份就够，不需要从 git log 反推设计意图。第 4 节是重点，那里有两条
-> 「看起来合理但会重新引入 bug」的改动，动手前务必先看。
+> 「看起来合理但会重新引入 bug」的改动，动手前务必先看；番茄钟和 Todo 见第 8 节。
 
 ---
 
@@ -15,8 +15,8 @@
 - 用户沟通语言：中文
 - 目录：`D:\软件项目\Blocker`
 
-注意一处不一致：`manifest.json` 里 `version` 是 `1.7.2`，但代码注释和页面角标都写
-`v2.0`。用户没有澄清过该以哪个为准，改版本号前先问。
+版本号已统一为 `2.0.0`（`manifest.json`），页面角标仍是 `v2.0`。加番茄钟时问过
+用户该以哪个为准，他选了「统一为 2.0.0」。下次改版本号前仍然先问。
 
 ## 1. 怎么跑
 
@@ -38,6 +38,9 @@ popup 右键「检查」；`chrome://extensions` 页面本身的报错容易漏�
 | `blockpage.html` | **双用途**：既是 popup 也是拦截落地页 | **是** |
 | `streaks.js` | popup 的逻辑（streak 显示、快速添加、reset 按钮） | 半（见下） |
 | `settings.html` / `settings.js` | 设置页，管理 block / timed 规则 | 是 |
+| `pomodoro.html` | 番茄钟 + Todo 的独立窗口页（计时器 / 任务 / 番茄钟设置都在这） | 是（新页面） |
+| `pomodoro.js` | `pomodoro.html` 的 UI 逻辑 | 否 |
+| `pomodoro-entry.js` | 跑在 `blockpage.html` 上的两个入口：顶栏 ⏱、被拦整页状态行 | 半 |
 | `manifest.json` | MV3 清单 | 否 |
 | `test/streak-harness.js` | streak 逻辑的验证 harness（见第 5 节） | 否 |
 | `streaks-back.js`、`manifest-back.json`、`maniback up.json` | 历史遗留备份，**已不参与运行** | — |
@@ -57,7 +60,10 @@ popup 宽度 350px 走窄版，被重定向到整页时（宽度 > 400px）走�
   日期键来自 `new Date().toLocaleDateString('zh-CN')`。
 - **DNR 规则 ID 分配**：普通拦截从 `1` 起；timed 从 `TIMED_RULE_ID_OFFSET`（2000000）
   加规则下标起，靠这个区间区分两类规则（`>= OFFSET` 即 timed）。
-- **三个 alarm**：`heartbeat`(1min)、`tracking`(1min)、`dailyReset`(24h，00:01)。
+- **alarm**：`heartbeat`(1min)、`tracking`(1min)、`dailyReset`(24h，00:01)，
+  外加番茄钟的一次性 `pomodoroPhase`（见 8.3）。
+- **番茄钟 / Todo 用另外三个键**（`pomodoro` / `pomodoroSettings` / `todo`），见第 8 节。
+  番茄钟规则走独立 ID 段 `1500000+`，它**必须低于** `TIMED_RULE_ID_OFFSET`。
 - **`storage.sync` 有配额**（约 8KB/项、100KB 总量），规则本身很小，但别往 sync 写用量。
 
 **MV3 注意事项**：Service Worker 空闲约 30s 就被回收，**顶层代码每次 worker 启动
@@ -136,7 +142,8 @@ Chrome 对**全新安装**的扩展，默认把 `<all_urls>` 站点访问设为
 
 ## 5. 测试
 
-仓库里唯一的测试是这个 harness：`test/streak-harness.js`。
+仓库里有两个 harness：`test/streak-harness.js`（streak）和 `test/pomodoro-harness.js`
+（番茄钟 + Todo，见第 8 节）。两者都靠 Node 的 `vm` 起一个假的 MV3 环境。
 
 ```powershell
 node test/streak-harness.js background.js            # 当前版本，应 10/10
@@ -159,7 +166,19 @@ node test/streak-harness.js $env:TEMP\baseline.js        # 应 5/10，失败项�
 如果你改了逻辑后两个版本都是 10/10，说明 harness 已经失去区分度，**别就此认为
 改动是安全的** —— 去补一个会在旧版本上失败的新场景。
 
-harness 只覆盖 streak 这一块。DNR 规则、时长统计、拦截本身**没有任何自动化测试**，
+`test/pomodoro-harness.js` 用同一套骨架，另外加了**可注入的假时钟**（锚在当天
+12:00，避免跨午夜把「快进几小时」变成跨天）和 `chrome.action` / `chrome.notifications` /
+真实记账的 DNR 桩：
+
+```powershell
+node test/pomodoro-harness.js background.js        # 当前版本，应 12/12
+```
+
+覆盖 12 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
+启动重新 arm、并发 tick 只记一次。它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。
+
+两个 harness 只覆盖 streak 与番茄钟。DNR 规则本身、时长统计、拦截效果**没有全链路
+自动化测试**，只能手动在浏览器里验。
 只能手动在浏览器里验。
 
 ## 6. 参考（设计依据，非必须重读）
@@ -184,11 +203,14 @@ harness 只覆盖 streak 这一块。DNR 规则、时长统计、拦截本身**�
 | `1f3dc96` | 修复前的完整快照 —— **harness 的对照基线** |
 | `81abc1d` | streak 修复：只在「关扩展」和「手动重置」时清零 |
 | `22827b2` | 补上第三条：撤销站点访问权限时清零 |
+| `503efef` | 加 HANDOFF.md / CLAUDE.md / streak harness |
+| （未提交） | 番茄钟 + Todo，见第 8 节 |
 
 ### 已确认未做的事
 
-- **前端一行未动**：用户明确要求「不要改前端页面」，本次改动全在 `background.js`。
-  `blockpage.html`、`streaks.js`、`settings.*` 保持原样。
+- **streak 那次的改动前端一行未动**：全在 `background.js`。番茄钟那次（第 8 节）对
+  `blockpage.html` 只有两处增量：顶栏加一个 ⏱ 图标、被拦整页加一行状态行。
+  `streaks.js`、`settings.html`、`settings.js` 至今仍是原样（用户要求不改变原有布局）。
 - `streaks.js` 的 `resetStreak()` 没有清 `needsAlert`，也没记 `hadHostAccess`。
   不影响正确性（后台每次启动都会重算），但如果以后 popup 要展示更细的状态，
   从这里入手。
@@ -212,7 +234,88 @@ harness 只覆盖 streak 这一块。DNR 规则、时长统计、拦截本身**�
 ### 建议的下一步（用户未要求，仅备选）
 
 - 用第 6 节的思路给「权限撤销」加即时检测（需先解决限制 1 的验证问题）
-- 给 DNR / 时长统计补自动化测试（目前是零覆盖）
-- 统一 `1.7.2` vs `v2.0` 的版本号表述（**先问用户以哪个为准**）
+- 给 DNR 的实际拦截效果 / 时长统计补自动化测试（规则集合已有 harness 覆盖，端到端仍无覆盖）
+- ~~统一 `1.7.2` vs `v2.0` 的版本号表述~~ —— 已完成，统一为 `2.0.0`
 - 清理 `streaks-back.js` / `manifest-back.json` / `maniback up.json` 三个历史备份
   （**先问用户**，它们可能有留存意图）
+
+## 8. 番茄钟 & Todo（独立窗口版）
+
+### 8.1 界面与入口
+
+- 全部 UI 在独立窗口页 `pomodoro.html`：计时器、任务清单、番茄钟设置都在这一个页面里。
+  `pomodoro.js` 是它的逻辑，秒级 `setInterval` **只允许出现在这类普通页面**里。
+- `pomodoro-entry.js` 跑在 `blockpage.html` 上，只做两件事：顶栏 ⏱ 按钮打开窗口、
+  被拦整页显示「Focus in progress · MM:SS」或「Start a focus session」。
+  它被包在 IIFE 里 —— 要和 `streaks.js` 共享全局作用域，不能撞名。
+- 窗口是单例：先 `chrome.windows.getAll({populate:true})` 找已存在的页面并聚焦，
+  没有才新建 460x660。
+- **`streaks.js`、`settings.html`、`settings.js` 一行未动**。用户要求「不要改变原有界面
+  布局」，所以番茄钟设置内嵌在自己的页面里，没往设置页加卡片；`blockpage.html` 只多了
+  顶栏一个图标和整页一行状态。
+
+### 8.2 存储
+
+| 键 | 区域 | 含义 |
+|---|---|---|
+| `pomodoro` | local | 运行态：`phase` / `endAt` / `pausedRemainingMs` / `cycleDone` / `dayKey` / `focusToday` / `focusMsToday` / `taskId` / `strictNow` |
+| `pomodoroSettings` | sync | 配置：三段时长、长休间隔、两个自动开始开关、`focusBlocksTimed` |
+| `todo` | local | `{v, tasks:[{id,text,done,createdAt,doneAt,pomodoros,focusMs}]}`，数组顺序即显示顺序 |
+
+### 8.3 计时机制
+
+- **唯一权威是 `endAt` 时间戳**，剩余时间每次都用 `endAt - now` 求值。background
+  **不跑 `setInterval`**：一个一次性 alarm `pomodoroPhase`（`when: endAt`）负责准点，
+  已有的 `tracking` alarm（1min）兜底，`initialize()` 负责启动时的权威对齐。
+- 到期语义是**挂钟语义**（用户拍板）：`now >= endAt` 就算这一段完成，哪怕晚了三小时。
+  风险由两条硬约束兜住：**一次 tick 只推进一个相位**，且**新相位的 `endAt` 从 `now`
+  重算**（不继承旧截止时间）。所以关机三小时回来只记 1 段，绝不级联。
+- `skip` / `stop` / `pause` 都不记账；`pause` 把剩余冻进 `pausedRemainingMs` 并清 `endAt`。
+- **`pomodoroBusy` 是防重入的**：popup 的秒级 tick 和 alarm 可能重叠，缺了它就会重复
+  记账、重复发通知（harness 的 P12 守这一条，故意删掉会掉分）。
+- 休眠/关机后一次性 alarm 不保证还在，所以**启动时永远从 `endAt` 重新对齐并重新 arm**，
+  不要往这条路径上加内存态假设。alarm 晚到最多约 1 分钟，这是有意的（`tracking` 兜底）。
+
+### 8.4 与拦截系统的耦合
+
+- `strictNow = (phase === 'focus' && settings.focusBlocksTimed)`，由 background 写进 local
+  的 `pomodoro` 状态；`syncAllRules()` 和 `content.js` 都读它。**暂停不解锁**（暂停也算还在
+  专注期），只有 `stop` / `skip` 才离开。
+- 专注期里 `syncAllRules()` 给每个 timed 站点直接注册规则，**不看当天用量**；离开专注期时
+  整表重算，恢复成「按真实用量判断」。所以**真正超限的站点会继续被封**——不要改成
+  「退出专注期就删掉番茄钟规则」，那会误放超限站点。
+- 番茄钟规则的 ID 段是 `POMODORO_RULE_ID_OFFSET = 1500000`，**必须低于
+  `TIMED_RULE_ID_OFFSET`（2000000）**：`enforceTimeLimit` / `resetDailyLimits` 用
+  `id >= TIMED_RULE_ID_OFFSET` 筛 timed 规则，落进那个范围的番茄钟规则会被误删。
+- 专注期被重定向到拦截页的标签页**不会自动回跳**，需要刷新（整页会显示倒计时）。
+
+### 8.5 通知与 badge
+
+- badge 免权限：专注期显示剩余分钟 + 橙色，休息期绿色，idle 清空。精度受 1 分钟 alarm
+  限制，最多滞后约 1 分钟。
+- 系统通知走 `permissions: ["notifications"]`（用户要求直接要权限，不走 optional）。
+  **只有 `now - endAt <= POMODORO_NOTIFY_MAX_LATE_MS`（2 分钟）才发**，避免休眠/关机后
+  补发陈旧通知。注意：这条迟到判断**只管通知**，不影响记账。
+
+### 8.6 Todo
+
+- 未完成的任务跨天保留；已完成进 Done 区按 `doneAt` 倒序，**不自动清理**，只有
+  「Clear completed」会删。今日完成数由 `doneAt` 派生，不单独存储。
+- 专注自然完成时，若 `taskId` 指向的任务还在，就 `pomodoros+1`、`focusMs += 名义时长`；
+  找不到就跳过（不报错）。任务在中途被勾完成仍照记。
+- 每行操作：▶（以该任务启动一段专注）、勾选完成、双击改名、上移/下移、删除。**不引入拖拽**。
+
+### 8.7 验证
+
+见第 5 节：`node test/pomodoro-harness.js background.js`（应 12/12）。
+
+### 8.8 别踩的坑
+
+1. **不要**在番茄钟代码里读写 `startDate` / `needsAlert` / `hadHostAccess` / `swAlive`。
+   唯一的例外是一次**单向**调用：`breakStreak()` 里会 `pomodoroStop()`（扩展被关掉或
+   站点访问权限被撤销 ⇒ 这一段的拦截保证已经不存在 ⇒ 该段作废）。番茄钟从不反向读
+   streak 状态。
+2. 8.3 的「挂钟语义 + 迟到判断」是**计时器语义**，与 4.4 禁令禁止的「按心跳间隔重置
+   streak」是两件事。看到 `lateMs` / `POMODORO_NOTIFY_MAX_LATE_MS` 不要以为踩了 4.4 的雷，
+   也不要「顺手统一」成同一套逻辑。
+3. 别把秒级 `setInterval` 搬进 `background.js`。

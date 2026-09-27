@@ -55,8 +55,13 @@ function runLifetime(stores, opts) {
   const L = { startup: [], installed: [], alarm: [], message: [], activated: [], updated: [] };
 
   const chrome = {
+    action: {
+      setBadgeText: async () => {},
+      setBadgeBackgroundColor: async () => {},
+    },
     alarms: {
       create: () => {},
+      clear: async () => {},
       onAlarm: { addListener: (fn) => L.alarm.push(fn) },
     },
     storage: {
@@ -75,9 +80,15 @@ function runLifetime(stores, opts) {
       onUpdated: { addListener: (fn) => L.updated.push(fn) },
     },
     runtime: {
+      getURL: (path) => 'chrome-extension://test/' + path,
       onMessage: { addListener: (fn) => L.message.push(fn) },
       onStartup: { addListener: (fn) => L.startup.push(fn) },
       onInstalled: { addListener: (fn) => L.installed.push(fn) },
+    },
+    notifications: {
+      create: () => {},
+      clear: async () => {},
+      onClicked: { addListener: () => {} },
     },
     // Host ("site access") permission as the user currently has it set.
     permissions: {

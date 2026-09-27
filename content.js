@@ -1,7 +1,7 @@
 // ============================================================
 // content.js — Dual-layer defense for Website Blocker v2.0
-// Supports: complete blocks, timed blocks (with daily usage check),
-//           and keyword blocks. Runs at document_start.
+// Supports: complete blocks, timed blocks (with daily usage check), keyword
+//           blocks, and focus-session enforcement. Runs at document_start.
 // ============================================================
 
 function getTodayKey() {
@@ -56,19 +56,22 @@ function checkAndBlock() {
             }
         }
 
-        // 2. Check timed rules — need to read daily usage
+        // 2. Check timed rules — need daily usage plus the pomodoro mirror
         if (timedRules.length > 0) {
-            chrome.storage.local.get(['dailyUsage'], function (localRes) {
+            chrome.storage.local.get(['dailyUsage', 'pomodoro'], function (localRes) {
                 var dailyUsage = localRes.dailyUsage || {};
                 var today = getTodayKey();
                 var todayUsage = dailyUsage[today] || {};
+                // A running focus session blocks timed sites outright, whatever
+                // today's usage is. The background state machine owns this flag.
+                var strictNow = !!(localRes.pomodoro && localRes.pomodoro.strictNow);
 
                 for (var k = 0; k < timedRules.length; k++) {
                     var timedRule = timedRules[k];
                     if (currentUrl.indexOf(timedRule.val) !== -1) {
                         var usedMs = todayUsage[timedRule.val] || 0;
                         var limitMs = (timedRule.limitMin || 30) * 60 * 1000;
-                        if (usedMs >= limitMs) {
+                        if (strictNow || usedMs >= limitMs) {
                             redirectToBlockPage();
                             return;
                         }
