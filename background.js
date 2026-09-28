@@ -91,12 +91,25 @@ function syncAllRules() {
 // A worker that is being torn down during an extension reload can still land a
 // late call, so on the unique-id error read the stale set again and retry once.
 async function applyDynamicRules(rulesToAdd) {
+  // Belt and braces: an id appearing twice in one update is an immediate
+  // failure in Chrome, so make that impossible no matter what the caller built.
+  const seen = new Set();
+  const unique = [];
+  for (const rule of rulesToAdd) {
+    if (seen.has(rule.id)) {
+      console.warn('[Blocker] Dropped a duplicate DNR rule id', rule.id);
+      continue;
+    }
+    seen.add(rule.id);
+    unique.push(rule);
+  }
+
   for (let attempt = 1; ; attempt++) {
     const stale = await chrome.declarativeNetRequest.getDynamicRules();
     try {
       await chrome.declarativeNetRequest.updateDynamicRules({
         removeRuleIds: stale.map((r) => r.id),
-        addRules: rulesToAdd
+        addRules: unique
       });
       return;
     } catch (err) {
@@ -107,6 +120,9 @@ async function applyDynamicRules(rulesToAdd) {
 }
 
 async function syncAllRulesNow() {
+  // Diagnostics for the catch below: what we asked for vs what was on disk.
+  let wantedIds = [];
+  let liveIds = [];
   try {
     // Get current state: blocked items + daily usage + pomodoro (for strictNow)
     const [syncData, localData] = await Promise.all([
@@ -169,10 +185,16 @@ async function syncAllRulesNow() {
 
     // Clears the previous set and installs the new one in one atomic update,
     // including when rulesToAdd is empty.
+    wantedIds = rulesToAdd.map((r) => r.id);
+    try {
+      liveIds = (await chrome.declarativeNetRequest.getDynamicRules()).map((r) => r.id);
+    } catch (e) { /* diagnostics only */ }
     await applyDynamicRules(rulesToAdd);
     console.log('[Blocker] Synced', rulesToAdd.length, 'DNR rules');
   } catch (err) {
-    console.error('[Blocker] syncAllRules error:', err);
+    console.error('[Blocker] syncAllRules error:', err,
+      '| wanted rule ids', wantedIds.join(',') || '(none)',
+      '| live rule ids', liveIds.join(',') || '(none)');
   }
 }
 
@@ -1043,7 +1065,8 @@ async function initialize() {
   if (initialized) return;
   initialized = true;
 
-  console.log('[Blocker] Initializing v2.0...');
+  const manifestVersion = (chrome.runtime.getManifest && chrome.runtime.getManifest().version) || 'unknown';
+  console.log('[Blocker] Initializing v' + manifestVersion + '...');
 
   // Migrate old data format
   migrateData();

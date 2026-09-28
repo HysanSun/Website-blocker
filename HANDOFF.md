@@ -15,8 +15,9 @@
 - 用户沟通语言：中文
 - 目录：`D:\软件项目\Blocker`
 
-版本号已统一为 `2.0.0`（`manifest.json`），页面角标仍是 `v2.0`。加番茄钟时问过
-用户该以哪个为准，他选了「统一为 2.0.0」。下次改版本号前仍然先问。
+版本号：`2.0.1`（`manifest.json`），页面角标仍是 `v2.0`。加番茄钟时问过用户该以哪个
+为准，他选了「统一为 2.0.0」；后来用户要靠版本号判断 `chrome://extensions` 的 reload
+到底有没有生效，才升到 `2.0.1`。**下次改版本号前仍然先问。**
 
 ## 1. 怎么跑
 
@@ -70,6 +71,8 @@ popup 宽度 350px 走窄版，被重定向到整页时（宽度 > 400px）走�
   锁里面，`syncAllRulesNow()` 的「清空 + 安装」是**一次** `updateDynamicRules` 调用
   （`applyDynamicRules()`），中间没有窗口；万一还是有别的写者插进来（例如 reload 时
   正在被销毁的旧 worker 落下最后一笔），会重读旧集合并重试一次，而不是直接报错收工。
+  写之前还会按 id 去重；报错日志会带上「想写的 id / 当时磁盘上的 id」，便于定位。
+  启动日志用 `chrome.runtime.getManifest().version` 打印版本，控制台能自证是哪个构建。
 - **alarm**：`heartbeat`(1min)、`tracking`(1min)、`dailyReset`(24h，00:01)，
   外加番茄钟的一次性 `pomodoroPhase`（见 8.3）。
 - **番茄钟 / Todo 用另外三个键**（`pomodoro` / `pomodoroSettings` / `todo`），见第 8 节。
@@ -197,11 +200,13 @@ worker 必须照样活着」、P14「`manifest.json` 必须把 `blockpage.html` 
 ```powershell
 pip install playwright
 playwright install chromium
-python test/browser-smoke.py            # 当前版本，应 7/7；拦截那一条要能访问 example.com
+python test/browser-smoke.py            # 当前版本，应 8/8；拦截那一条要能访问 example.com
 ```
 
 它真的把扩展装进 Chromium（必须 `headless=False`，headless shell 不支持扩展），依次验证：
-worker 存活、计时器真的倒数、加的任务进了 storage、被拦站点重定向到 `blockpage.html`。
+worker 存活、计时器真的倒数、加的任务进了 storage、被拦站点重定向到 `blockpage.html`，
+并且**service worker 控制台一条 error 都没有**（DNR 规则冲突就是在这里现形的）。它还会
+打印 `chrome.runtime.getManifest().version` —— 用来确认 reload 是否真的换上了新代码。
 对照：把 `manifest.json` 的 `web_accessible_resources` 删掉再跑，拦截那条必然 FAIL。
 
 ## 6. 参考（设计依据，非必须重读）
@@ -334,7 +339,7 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 ### 8.7 验证
 
 见第 5 节：`node test/pomodoro-harness.js background.js`（应 17/17），以及
-`python test/browser-smoke.py`（应 7/7，真浏览器）。
+`python test/browser-smoke.py`（应 8/8，真浏览器）。
 
 ### 8.8 别踩的坑
 

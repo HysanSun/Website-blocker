@@ -131,6 +131,7 @@ function runLifetime(stores, opts) {
       onUpdated: { addListener: (fn) => L.updated.push(fn) },
     },
     runtime: {
+      getManifest: () => ({ version: '0.0.0-test' }),
       getURL: (path) => 'chrome-extension://test/' + path,
       onMessage: { addListener: (fn) => L.message.push(fn) },
       onStartup: { addListener: (fn) => L.startup.push(fn) },

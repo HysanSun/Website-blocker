@@ -66,6 +66,13 @@ def main():
             print("extension id:", ext_id)
             check("service worker started", True)
 
+            # The worker console is where regressions like the DNR rule-id
+            # collision show up, and the manifest version is how you tell
+            # whether a chrome://extensions reload actually picked up the code.
+            sw_errors = []
+            sw.on("console", lambda m: sw_errors.append(m.text) if m.type == "error" else None)
+            print("running version:", sw.evaluate("() => chrome.runtime.getManifest().version"))
+
             page = ctx.new_page()
             errors = []
             page.on("pageerror", lambda e: (errors.append(str(e)), print("  [page error] %s" % e)))
@@ -126,6 +133,9 @@ def main():
                     check("block page shows the pomodoro entry",
                           "focus session" in probe.eval_on_selector("#pomodoro-line", "e=>e.textContent").lower())
 
+            # Give any tab/alarm-driven rule sync a chance to blow up.
+            page.wait_for_timeout(2500)
+            check("no service-worker console errors", not sw_errors, str(sw_errors[:3]))
             check("no uncaught page errors", not errors, str(errors))
         finally:
             ctx.close()
