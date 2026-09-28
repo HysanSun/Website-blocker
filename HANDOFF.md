@@ -237,7 +237,7 @@ P21–P25（本轮）守着「计划用量与 run」（8.9）：run 会自己走
 ```powershell
 pip install playwright
 playwright install chromium
-python test/browser-smoke.py            # 当前版本，应 26/26；拦截那一条要能访问 example.com
+python test/browser-smoke.py            # 当前版本，应 27/27；拦截那一条要能访问 example.com
 ```
 
 它真的把扩展装进 Chromium（必须 `headless=False`，headless shell 不支持扩展），依次验证：
@@ -249,6 +249,10 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 真的留下 `run`、估计值落进任务、专注期 `#skip-btn` 是 disabled；以及提问卡片（往
 storage 种一个 `review` 状态再刷新页面）能显示并点名任务、「Not yet」会重开对话框、
 「Yes, it's done」把任务归档进 Done、worker 拒绝 skip 专注、休息可以 skip。
+`3b` 里还有一条「清空输入框再敲 `3` 不能变成 `13`」：计划对话框的两个数字框如果
+**在 `input` 事件里无条件回写自己**，用户清空准备重输时值会被顶成 1、光标停在末尾，
+接着敲的数字就接在后面。对照：把 `syncPlanDialog()` 改回「无条件回写两个框」⇒
+那条 FAIL（`value=13`），并且连带「All」/run/估计值三条一起掉。
 对照：把 `manifest.json` 的 `web_accessible_resources` 删掉再跑，拦截那条必然 FAIL。
 
 ## 6. 参考（设计依据，非必须重读）
@@ -389,7 +393,7 @@ storage 种一个 `review` 状态再刷新页面）能显示并点名任务、�
 ### 8.7 验证
 
 见第 5 节：`node test/pomodoro-harness.js background.js`（应 25/25），以及
-`python test/browser-smoke.py`（应 26/26，真浏览器）。
+`python test/browser-smoke.py`（应 27/27，真浏览器）。
 
 ### 8.9 计划用量与 run（planned run，本轮新增）
 
@@ -415,6 +419,11 @@ storage 种一个 `review` 状态再刷新页面）能显示并点名任务、�
 - run 比估计值短时（只跑 2 单位、估计 4 单位）**安静结束**，不提问（P23）。`stop` 让 run
   作废，**已跑过的那部分不记账**（P25）—— `skip` 掉专注做不到，所以不存在「skip 之后
   run 停在半路」的状态。
+
+- 计划对话框的两个数字框**不能在 `input` 里无条件回写自己**：用户清空输入框准备重新
+  输入时，一次回写会把值顶成 1、光标留在末尾，接着敲的 `3` 就变成 `13`。
+  `syncPlanDialog(source)` 只重画「不是正在编辑的那一个」框，真正的夹取留给 `planStart`。
+  真浏览器冒烟测试有一条守它。
 
 ### 8.8 别踩的坑
 
