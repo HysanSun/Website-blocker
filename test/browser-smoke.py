@@ -115,8 +115,14 @@ def main():
             page.wait_for_selector("#plan-modal:not([hidden])", timeout=5000)
             check("the play button opens the plan dialog",
                   page.eval_on_selector("#plan-title", "e=>e.textContent") == "smoke task")
-            page.fill("#plan-estimate", "3")
+            # Clearing a number field to retype must not snap back and eat the
+            # next keystroke - that is how typing "3" used to become "13".
+            page.fill("#plan-estimate", "")
+            page.type("#plan-estimate", "3")
             page.wait_for_timeout(150)
+            typed = page.eval_on_selector("#plan-estimate", "e=>e.value")
+            check("typing an estimate is not mangled by the live clamp",
+                  typed == "3", "value=" + typed)
             page.click("#plan-all")
             units = page.eval_on_selector("#plan-units", "e=>e.value")
             check("All fills the units left in the estimate", units == "3", "units=" + units)

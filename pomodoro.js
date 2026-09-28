@@ -260,21 +260,31 @@
         return Math.max(1, planned - credited);
     }
 
-    function syncPlanDialog() {
+    // Redraw what depends on the two inputs, but never rewrite the field the
+    // user is typing in: clearing a number input to retype it would otherwise
+    // snap back to a value and swallow the next keystroke ("3" became "13").
+    function syncPlanDialog(source) {
         var task = taskById(planTaskId);
         var estimate = parseInt(planEstimate.value, 10);
-        if (!isFinite(estimate) || estimate < 1) estimate = 1;
-        planEstimate.value = estimate;
-        var cap = planCap(task, estimate);
-        var units = parseInt(planUnits.value, 10);
-        if (!isFinite(units) || units < 1) units = cap;
-        if (units > cap) units = cap;
-        planUnits.value = units;
+        var valid = isFinite(estimate) && estimate >= 1;
+        if (!valid && source !== planEstimate) {
+            estimate = 1;
+            valid = true;
+            planEstimate.value = estimate;
+        }
+        var cap = planCap(task, valid ? estimate : 1);
+        if (source !== planUnits) {
+            var units = parseInt(planUnits.value, 10);
+            if (!isFinite(units) || units < 1) units = cap;
+            planUnits.value = Math.min(units, cap);
+        }
         planUnits.max = cap;
         planAllN.textContent = cap;
         var credited = (task && task.pomodoros) || 0;
+        var raised = valid && estimate < credited;
         planHint.textContent = '1 unit = ' + settings.focusMin + ' min focus + ' +
-            settings.shortBreakMin + ' min break. ' + credited + ' unit(s) already credited.';
+            settings.shortBreakMin + ' min break. ' + credited + ' unit(s) already credited.' +
+            (raised ? ' A plan below that is kept at ' + credited + '.' : '');
     }
 
     function openPlanDialog(taskId) {
@@ -428,11 +438,11 @@
     reviewContinue.addEventListener('click', function () { answerReview('continue', true); });
     reviewLater.addEventListener('click', function () { answerReview('later'); });
 
-    planEstimate.addEventListener('input', syncPlanDialog);
-    planUnits.addEventListener('input', syncPlanDialog);
+    planEstimate.addEventListener('input', function () { syncPlanDialog(planEstimate); });
+    planUnits.addEventListener('input', function () { syncPlanDialog(planUnits); });
     planAll.addEventListener('click', function () {
         planUnits.value = planAllN.textContent;
-        syncPlanDialog();
+        syncPlanDialog(planUnits);
     });
     planCancel.addEventListener('click', closePlanDialog);
     planModal.addEventListener('click', function (e) {
