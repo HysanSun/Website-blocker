@@ -19,10 +19,17 @@
 为准，他选了「统一为 2.0.0」；后来用户要靠版本号判断 `chrome://extensions` 的 reload
 到底有没有生效，才一路升到 `2.0.2`。**下次改版本号前仍然先问。**
 
-本轮（2026-09-28 下午）用户报「版本已经是 2.0.2 了，错误卡片还在」。查下来的结论是两件事：
+上一轮（2026-09-28 下午）用户报「版本已经是 2.0.2 了，错误卡片还在」。查下来的结论是两件事：
 ① 那张卡片是**陈旧记录**（错误确实抛过，但抛它的是 2.0.1，reload 不会清掉卡片，见 8.8-6）；
 ② 真正的功能性事故是 2.0.1 引入、2.0.2 仍在的 `syncAllRulesNow()` catch 里 `items` 越界
 引用（见 8.8-7）。两处都已修，**版本号这次没有动 —— 要不要升 `2.0.3` 得先问用户**。
+
+本轮（2026-09-28 晚）做「计划用量 + run」（见 8.9，是本轮唯一的功能改动）：任务可以设
+预计单位数，从任务行 ▶ 弹对话框问「这次要跑几个单位 / 全部」，跑完估计单位后系统提问
+「任务完成了吗」。**专注期从本轮起不能被 `skip`**（只有休息可以），用户明确要求。
+改动只落在 `background.js` / `pomodoro.html` / `pomodoro.js` / `test/pomodoro-harness.js` /
+`test/browser-smoke.py`；`streaks.js`、`settings.html`、`settings.js`、`blockpage.html`
+依然一行未动。**版本号仍未动，要不要升 `2.0.3` 先问用户。**
 
 ## 1. 怎么跑
 
@@ -202,10 +209,10 @@ node test/streak-harness.js $env:TEMP\baseline.js        # 应 5/10，失败项�
 真实记账的 DNR 桩：
 
 ```powershell
-node test/pomodoro-harness.js background.js        # 当前版本，应 20/20
+node test/pomodoro-harness.js background.js        # 当前版本，应 25/25
 ```
 
-覆盖 20 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
+覆盖 25 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
 启动重新 arm、并发 tick 只记一次，外加四条回归护栏——P13「`chrome.notifications` 不存在时
 worker 必须照样活着」、P14「`manifest.json` 必须把 `blockpage.html` 列进
 `web_accessible_resources`」、P15「并发的规则同步不能撞 ID」、P16「一波并发同步不能留下
@@ -214,6 +221,12 @@ P18「`getDynamicRules()` 没报出来、但其实还活着的 id 也必须被�
 P19「写不进去的规则不能让已经封着的站点被放行（规则集不许被清空），而且这次失败仍然要给
 popup 回 `{success:true}`，不能变成挂死的消息端口」、P20「配额超限和每日重置都必须由同一个
 写手推导出规则集（超限装规则 + 跳转标签页，重置卸掉配额规则、留下专注期的规则）」。
+P21–P25（本轮）守着「计划用量与 run」（8.9）：run 会自己走完 N 个单位、在到达估计值时
+提问；专注不可 skip 而休息可以；run 短于估计值时安静结束；`done` / `continue` / `later`
+三个回答各自的效果；中途 `stop` 让 run 作废且已跑的部分不记账。对照做过：
+① 让 run 不再自动续下一段 ⇒ P21/P22/P23 FAIL；② 允许 `skip` 掉专注 ⇒ P5/P22 FAIL；
+③ 去掉「估计值不得低于已记单位」的夹取 ⇒ P24 FAIL。
+
 它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。P19/P20 的对照做过：
 把写入改回「删、写两次调用」⇒ P19 FAIL；让 `enforceTimeLimit` 空转 ⇒ P20 FAIL；
 把 `items` 挪回 `try` 里 ⇒ P19 连 harness 都炸（正是线上那个 ReferenceError）。
@@ -224,7 +237,7 @@ popup 回 `{success:true}`，不能变成挂死的消息端口」、P20「配额
 ```powershell
 pip install playwright
 playwright install chromium
-python test/browser-smoke.py            # 当前版本，应 11/11；拦截那一条要能访问 example.com
+python test/browser-smoke.py            # 当前版本，应 26/26；拦截那一条要能访问 example.com
 ```
 
 它真的把扩展装进 Chromium（必须 `headless=False`，headless shell 不支持扩展），依次验证：
@@ -232,6 +245,10 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 被拦页顶栏的 ⏱ 按钮真的能开出计时窗口、一波并发 `syncRules` 之后每个被拦站点只剩一条规则，
 并且**service worker 控制台一条 error 都没有**（DNR 规则冲突就是在这里现形的）。它还会
 打印 `chrome.runtime.getManifest().version` —— 用来确认 reload 是否真的换上了新代码。
+本轮又加了两组（`3b`、`7`）：▶ 能打开计划对话框、「All」填满剩余单位、启动后 worker 里
+真的留下 `run`、估计值落进任务、专注期 `#skip-btn` 是 disabled；以及提问卡片（往
+storage 种一个 `review` 状态再刷新页面）能显示并点名任务、「Not yet」会重开对话框、
+「Yes, it's done」把任务归档进 Done、worker 拒绝 skip 专注、休息可以 skip。
 对照：把 `manifest.json` 的 `web_accessible_resources` 删掉再跑，拦截那条必然 FAIL。
 
 ## 6. 参考（设计依据，非必须重读）
@@ -263,8 +280,11 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 | `85d98c9` | 规则写入改成原子更新 + 冲突重试（见第 3 节），补 P17 |
 | `ba8b95c` | 版本升到 `2.0.1`（用来判断 reload 是否生效）+ 失败日志带上 id，冒烟测试盯 worker 控制台 |
 | `7b8a69e` | 删除时显式点名「马上要复用的 id」（第 3 节），版本 `2.0.2`，补 P18 |
-| 本轮 | 规则写入改成**一次原子「删+写」**、配额/每日重置不再自己写规则（第 3 节）；修
+| `b305529` | 规则写入改成**一次原子「删+写」**、配额/每日重置不再自己写规则（第 3 节）；修
 `syncAllRulesNow()` catch 里 `items` 越界引用（8.8-7）；补 P19/P20 与冒烟测试第 7 项 |
+| `842f137` | docs：把上面的原子写入与「陈旧错误卡片」的诊断写进本文件 |
+| 本轮 | 「计划用量 + run」（8.9）：任务的预计单位数、▶ 计划对话框、run 自动续段、
+到达估计值后提问；**专注期不可 skip**；补 P21–P25 与冒烟测试 3b/7 两组 |
 
 ### 已确认未做的事
 
@@ -318,9 +338,9 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 
 | 键 | 区域 | 含义 |
 |---|---|---|
-| `pomodoro` | local | 运行态：`phase` / `endAt` / `pausedRemainingMs` / `cycleDone` / `dayKey` / `focusToday` / `focusMsToday` / `taskId` / `strictNow` |
+| `pomodoro` | local | 运行态：`phase` / `endAt` / `pausedRemainingMs` / `cycleDone` / `dayKey` / `focusToday` / `focusMsToday` / `taskId` / `strictNow`，外加本轮新增的 `run`（多单位承诺）与 `review`（待回答的提问） |
 | `pomodoroSettings` | sync | 配置：三段时长、长休间隔、两个自动开始开关、`focusBlocksTimed` |
-| `todo` | local | `{v, tasks:[{id,text,done,createdAt,doneAt,pomodoros,focusMs}]}`，数组顺序即显示顺序 |
+| `todo` | local | `{v, tasks:[{id,text,done,createdAt,doneAt,pomodoros,focusMs,plannedUnits}]}`，数组顺序即显示顺序；`plannedUnits` = 预计单位数（0 = 未估），`pomodoros` = 已记单位数 |
 
 ### 8.3 计时机制
 
@@ -340,7 +360,7 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 
 - `strictNow = (phase === 'focus' && settings.focusBlocksTimed)`，由 background 写进 local
   的 `pomodoro` 状态；`syncAllRules()` 和 `content.js` 都读它。**暂停不解锁**（暂停也算还在
-  专注期），只有 `stop` / `skip` 才离开。
+  专注期），只有 `stop` 才离开（`skip` 从本轮起只作用于休息，见 8.9）。
 - 专注期里 `syncAllRules()` 给每个 timed 站点直接注册规则，**不看当天用量**；离开专注期时
   整表重算，恢复成「按真实用量判断」。所以**真正超限的站点会继续被封**——不要改成
   「退出专注期就删掉番茄钟规则」，那会误放超限站点。
@@ -363,12 +383,38 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
   「Clear completed」会删。今日完成数由 `doneAt` 派生，不单独存储。
 - 专注自然完成时，若 `taskId` 指向的任务还在，就 `pomodoros+1`、`focusMs += 名义时长`；
   找不到就跳过（不报错）。任务在中途被勾完成仍照记。
-- 每行操作：▶（以该任务启动一段专注）、勾选完成、双击改名、上移/下移、删除。**不引入拖拽**。
+- 每行操作：▶ 与行尾的 `N/M 🍅` 都会打开**计划对话框**（见 8.9）、勾选完成、双击改名、
+  上移/下移、删除。**不引入拖拽**。
 
 ### 8.7 验证
 
-见第 5 节：`node test/pomodoro-harness.js background.js`（应 20/20），以及
-`python test/browser-smoke.py`（应 11/11，真浏览器）。
+见第 5 节：`node test/pomodoro-harness.js background.js`（应 25/25），以及
+`python test/browser-smoke.py`（应 26/26，真浏览器）。
+
+### 8.9 计划用量与 run（planned run，本轮新增）
+
+用户要的语义：**任务可以设「预计用几个番茄单位」**（1 单位 = 1 段专注 + 紧随其后的休息，
+时长由 `pomodoroSettings` 决定），再从任务行 ▶ 启动一段**有终点的**专注。
+
+- 任务字段 `plannedUnits`（0 = 还没估）；`task.pomodoros` 是**已记单位数**（每段自然完成的
+  专注 +1）。老数据没有这个字段，`normalizeTodo()` 一律补成 0。
+- **`setTaskPlan()` 会把估计值向上夹到「已记单位」之上**（`max(credited, units)`）。这不是
+  洁癖：review 的触发条件就是 `credited >= planned`，估计值一旦能低于已记单位，
+  「到达估计值」这个时刻就永远不会再来一次。harness 的 P24 守着这条。
+- `state.run = {taskId, units, focusDone}` 是一次**多单位承诺**：run 期间**不看
+  `autoStartBreak` / `autoStartFocus`**，休息一结束就直接进下一段专注 —— 这就是「一直做到
+  做完」。休息仍然可以 `skip`（提前结束休息，run 照样继续）。
+- **专注期不能 `skip`**：`pomodoroSkip()` 对 `phase === 'focus'` 直接原样返回。唯一的出口是
+  `stop`（不记账）。用户明确要求如此，P5/P22 守着。
+- **review（系统提问）在 run 的最后一个休息结束时才触发**（不是最后一段专注结束时），这样
+  「一个单位」真的包含了它的休息。条件是 `planned > 0 && credited >= planned`，写成
+  `state.review = {taskId, at}`，页面据此显示 `#review-card`。
+- 三个回答（`pomodoroReviewAnswer`）：`done` 归档任务；`continue` 只清问题，页面随后重开
+  计划对话框（用户在框里重新估 ⇒ 走 `pomodoroStart` 的 `planUnits`）；`later` 只清问题。
+  对同一个任务重新 `pomodoroStart` 也会清掉问题。
+- run 比估计值短时（只跑 2 单位、估计 4 单位）**安静结束**，不提问（P23）。`stop` 让 run
+  作废，**已跑过的那部分不记账**（P25）—— `skip` 掉专注做不到，所以不存在「skip 之后
+  run 停在半路」的状态。
 
 ### 8.8 别踩的坑
 

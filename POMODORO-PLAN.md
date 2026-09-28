@@ -19,6 +19,9 @@
 | 结束提醒 | 直接要 `notifications` 权限（不走 optional） | `manifest.json` |
 | 版本号 | 统一为 `2.0.0` | `manifest.json` |
 | 番茄钟设置放哪 | 内嵌在 `pomodoro.html`，**不动 `settings.*`** | 落实「不改变原有布局」 |
+| 专注期能不能 skip | **不能**：只有休息可以 skip；专注的出口是 Stop（不记账） | `pomodoroSkip()` |
+| 任务的预计用时 | 每个任务可设 `plannedUnits`（以番茄为单位）；行首 ▶ 弹框问「本次跑几个单位 / 全部」 | `pomodoro.html` + `setTaskPlan()` |
+| 到达计划时间之后 | 系统提问「任务完成了吗」：完成⇒归档，没完成⇒重估单位继续 | `pomodoroReviewAnswer` |
 
 ## 实施中发现的坑（harness 已经守住）
 
@@ -29,10 +32,13 @@
 - 通知的迟到判断只管通知，不影响记账。P10 守。
 - 番茄钟规则 ID 段必须低于 `TIMED_RULE_ID_OFFSET`，否则会被 `resetDailyLimits` 误删。P8 守。
 - harness 的假时钟要锚在当天 12:00，否则「快进三小时」在深夜会变成跨天，测试随机挂。
+- 「到达估计值」的条件是 `credited >= planned`，所以估计值**不能低于已记单位**，否则提问
+  从此再也触发不了。P24 守。
+- run 期间要绕开 `autoStartFocus`，否则用户设的「不自动开始下一段」会把 run 停在第 2 段。P21 守。
 
 ## 怎么验
 
 ```powershell
-node test/pomodoro-harness.js background.js   # 应 12/12
+node test/pomodoro-harness.js background.js   # 应 25/25
 node test/streak-harness.js background.js     # 应 10/10
 ```
