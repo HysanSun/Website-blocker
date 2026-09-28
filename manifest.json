@@ -34,5 +34,12 @@
       "run_at": "document_start",
       "match_about_blank": true
     }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": ["blockpage.html"],
+      "matches": ["<all_urls>"]
+    }
   ]
 }

@@ -107,6 +107,15 @@
             color: var(--text-muted);
             margin-top: 10px;
         }
+        #notify-hint {
+            margin-top: 10px;
+            padding: 7px 9px;
+            background: #fef3e4;
+            border: 1px solid #f3d5ae;
+            border-radius: var(--radius-sm);
+            font-size: 0.68rem;
+            color: #8a5a1a;
+        }
 
         /* --- Tasks --- */
         .add-row { display: flex; gap: 8px; margin-bottom: 8px; }
@@ -246,6 +255,7 @@
             <button id="stop-btn">Stop</button>
         </div>
         <div id="today-line"></div>
+        <div id="notify-hint" hidden>System notifications are off: Chrome has not granted the permission. Reload the extension on chrome://extensions and accept it.</div>
     </div>
 
     <!-- Tasks -->

@@ -18,6 +18,7 @@
     var skipBtn = el('skip-btn');
     var stopBtn = el('stop-btn');
     var todayLine = el('today-line');
+    var notifyHint = el('notify-hint');
     var taskInput = el('task-input');
     var taskAdd = el('task-add');
     var taskList = el('task-list');
@@ -184,6 +185,11 @@
             state = res.state;
             settings = res.settings;
             renderTimer();
+            // Notifications are optional: Chrome only hands over the API once
+            // the permission is granted, and reloading an unpacked extension
+            // after adding one does not grant it. Say so instead of going
+            // quiet about it.
+            if (notifyHint) notifyHint.hidden = res.notifications !== false;
         }
         return res;
     }

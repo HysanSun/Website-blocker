@@ -43,6 +43,8 @@ popup 右键「检查」；`chrome://extensions` 页面本身的报错容易漏�
 | `pomodoro-entry.js` | 跑在 `blockpage.html` 上的两个入口：顶栏 ⏱、被拦整页状态行 | 半 |
 | `manifest.json` | MV3 清单 | 否 |
 | `test/streak-harness.js` | streak 逻辑的验证 harness（见第 5 节） | 否 |
+| `test/pomodoro-harness.js` | 番茄钟 + Todo 的验证 harness（见第 5 节） | 否 |
+| `test/browser-smoke.py` | 真浏览器冒烟测试：真的把扩展装进 Chromium（见第 5 节） | 否 |
 | `streaks-back.js`、`manifest-back.json`、`maniback up.json` | 历史遗留备份，**已不参与运行** | — |
 
 **`blockpage.html` 一个文件两种形态**：靠 `@media (min-width: 400px)` 切换 ——
@@ -171,15 +173,26 @@ node test/streak-harness.js $env:TEMP\baseline.js        # 应 5/10，失败项�
 真实记账的 DNR 桩：
 
 ```powershell
-node test/pomodoro-harness.js background.js        # 当前版本，应 12/12
+node test/pomodoro-harness.js background.js        # 当前版本，应 14/14
 ```
 
-覆盖 12 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
-启动重新 arm、并发 tick 只记一次。它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。
+覆盖 14 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
+启动重新 arm、并发 tick 只记一次，外加两条回归护栏——P13「`chrome.notifications` 不存在时
+worker 必须照样活着」、P14「`manifest.json` 必须把 `blockpage.html` 列进
+`web_accessible_resources`」。它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。
 
-两个 harness 只覆盖 streak 与番茄钟。DNR 规则本身、时长统计、拦截效果**没有全链路
-自动化测试**，只能手动在浏览器里验。
-只能手动在浏览器里验。
+两个 harness 都跑在 Node 的 `vm` 里，**从不真正加载扩展**，所以抓不到「worker 在注册
+任何东西之前就崩了」这一类事故。为此另有一个真浏览器冒烟测试：
+
+```powershell
+pip install playwright
+playwright install chromium
+python test/browser-smoke.py            # 当前版本，应 7/7；拦截那一条要能访问 example.com
+```
+
+它真的把扩展装进 Chromium（必须 `headless=False`，headless shell 不支持扩展），依次验证：
+worker 存活、计时器真的倒数、加的任务进了 storage、被拦站点重定向到 `blockpage.html`。
+对照：把 `manifest.json` 的 `web_accessible_resources` 删掉再跑，拦截那条必然 FAIL。
 
 ## 6. 参考（设计依据，非必须重读）
 
@@ -204,7 +217,8 @@ node test/pomodoro-harness.js background.js        # 当前版本，应 12/12
 | `81abc1d` | streak 修复：只在「关扩展」和「手动重置」时清零 |
 | `22827b2` | 补上第三条：撤销站点访问权限时清零 |
 | `503efef` | 加 HANDOFF.md / CLAUDE.md / streak harness |
-| （未提交） | 番茄钟 + Todo，见第 8 节 |
+| `ff4ac41` | 番茄钟 + Todo（独立窗口版），见第 8 节 |
+| （本次） | 修 worker 启动即崩（8.8-4）与拦截重定向失效（8.8-5），补 P13/P14 与真浏览器冒烟测试 |
 
 ### 已确认未做的事
 
@@ -307,7 +321,8 @@ node test/pomodoro-harness.js background.js        # 当前版本，应 12/12
 
 ### 8.7 验证
 
-见第 5 节：`node test/pomodoro-harness.js background.js`（应 12/12）。
+见第 5 节：`node test/pomodoro-harness.js background.js`（应 14/14），以及
+`python test/browser-smoke.py`（应 7/7，真浏览器）。
 
 ### 8.8 别踩的坑
 
@@ -319,3 +334,15 @@ node test/pomodoro-harness.js background.js        # 当前版本，应 12/12
    streak」是两件事。看到 `lateMs` / `POMODORO_NOTIFY_MAX_LATE_MS` 不要以为踩了 4.4 的雷，
    也不要「顺手统一」成同一套逻辑。
 3. 别把秒级 `setInterval` 搬进 `background.js`。
+4. **别在 `background.js` 顶层直接摸 `chrome.*` 的命名空间。** `chrome.notifications`
+   在权限真正授予之前是 `undefined` —— 而「往 manifest 里加了权限之后 reload 一个未打包
+   扩展」并不会授权。曾经顶层有一句 `chrome.notifications.onClicked.addListener(...)`，
+   它一抛错，**它之后的顶层语句全都不执行**（message handler、alarm handler、
+   `initialize()`、tabs 监听），症状就是「计时器不动、任务加不了、拦截也一起挂」。
+   现在统一走 `notificationsAvailable()` 判定，`pomodoroStatus()` 也会回传
+   `notifications` 供页面显示提示。harness 的 P13 守着这条。
+5. **`blockpage.html` 必须留在 `manifest.json` 的 `web_accessible_resources` 里。**
+   Chrome 拒绝对「非 web accessible 的扩展页」做重定向：DNR 的 `extensionPath` 重定向和
+   `content.js` 里的 `location.href = getURL('blockpage.html')` 都会变成
+   `ERR_BLOCKED_BY_CLIENT`，两层防线同时失效，拦截整个不可用。已在 Chromium 153 与 Edge
+   上实测（v1.7.2 起就一直是坏的）。harness 的 P14 守着这条。

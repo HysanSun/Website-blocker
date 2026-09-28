@@ -10,6 +10,7 @@
 // ============================================================
 const fs = require('fs');
 const vm = require('vm');
+const path = require('path');
 
 const SRC = process.argv[2];
 const LABEL = process.argv[3] || SRC;
@@ -126,6 +127,10 @@ function runLifetime(stores, opts) {
       onClicked: { addListener: () => {} },
     },
   };
+
+  // Chrome only exposes this namespace once the permission has actually been
+  // granted, so the worker has to cope with it being absent.
+  if (opts && opts.noNotifications) delete chrome.notifications;
 
   const sandbox = {
     chrome,
@@ -508,6 +513,41 @@ const scenarios = [
       const ok = p.focusToday === 1 && p.cycleDone === 1 && t.pomodoros === 1 && r.life.notifs.length === 1;
       return [ok, 'focusToday=' + p.focusToday + ' cycleDone=' + p.cycleDone +
         ' taskPomos=' + t.pomodoros + ' notifs=' + r.life.notifs.length];
+    },
+  },
+  {
+    name: 'P13 a missing chrome.notifications namespace must not kill the worker',
+    run: async () => {
+      NOW = T0;
+      const s = seed({ pomodoro: { phase: 'focus', endAt: T0 + 25 * MIN, startedAt: T0 } });
+      const life = runLifetime(s, { noNotifications: true });
+      await life.settle();
+      const started = await life.sendMessage({ action: 'pomodoroStart' });
+      const st = await life.sendMessage({ action: 'pomodoroGetState' });
+      return { started, st };
+    },
+    expect: (r) => {
+      const ok = !!(r.started && r.started.success === true && r.st && r.st.success === true &&
+        r.st.state.phase === 'focus' && r.st.notifications === false);
+      return [ok, 'startOk=' + !!(r.started && r.started.success) +
+        ' phase=' + (r.st && r.st.state && r.st.state.phase) +
+        ' notifications=' + (r.st && r.st.notifications)];
+    },
+  },
+  {
+    name: 'P14 manifest exposes blockpage.html so redirects to it are allowed',
+    run: async () => {
+      const manifestPath = path.join(path.dirname(SRC), 'manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      return { manifest };
+    },
+    expect: (r) => {
+      const war = r.manifest.web_accessible_resources || [];
+      const exposed = war.some((e) => (e.resources || []).indexOf('blockpage.html') !== -1);
+      // Chrome refuses a DNR redirect - and a page-level navigation - to an
+      // extension page that is not web accessible (ERR_BLOCKED_BY_CLIENT).
+      // Blocking is dead without this manifest entry; verified in real Chrome.
+      return [exposed, 'web_accessible_resources=' + JSON.stringify(war)];
     },
   },
 ];

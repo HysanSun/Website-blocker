@@ -545,10 +545,18 @@ async function updatePomodoroBadge() {
   }
 }
 
+// chrome.notifications only exists once the permission has actually been
+// granted, and reloading an unpacked extension after a permission was added
+// does NOT grant it. Notifications are optional everywhere.
+function notificationsAvailable() {
+  return !!(chrome.notifications && chrome.notifications.create);
+}
+
 function notifyPomodoroPhase(fromPhase, toPhase, lateMs, settings) {
   // A phase that expired hours ago (machine asleep or shut down) is old news.
   // This guard is about the notification only - the session is still credited.
   if (lateMs > POMODORO_NOTIFY_MAX_LATE_MS) return;
+  if (!notificationsAvailable()) return;
   const title = (fromPhase === 'focus') ? 'Focus complete' : 'Break over';
   let message = 'Ready when you are.';
   if (toPhase === 'shortBreak') message = 'Take a ' + settings.shortBreakMin + ' min break.';
@@ -656,7 +664,12 @@ function pomodoroTickAndApplySafe() {
 
 async function pomodoroStatus() {
   const [state, settings] = await Promise.all([getPomodoroState(), getPomodoroSettings()]);
-  return { state: state, settings: settings, remainingMs: pomodoroRemainingMs(state) };
+  return {
+    state: state,
+    settings: settings,
+    remainingMs: pomodoroRemainingMs(state),
+    notifications: notificationsAvailable()
+  };
 }
 
 async function pomodoroStart(taskId) {
@@ -816,9 +829,15 @@ async function todoClearDone() {
   return saveTodo(todo);
 }
 
-chrome.notifications.onClicked.addListener((id) => {
-  if (id === POMODORO_NOTIFY_ID) chrome.notifications.clear(id);
-});
+// Registered defensively and kept last in the section: this used to be an
+// unconditional top-level call, and when the notifications permission had not
+// been granted the TypeError aborted the rest of this file - no message
+// handler, no alarm handler, no initialize(), no blocking at all.
+if (notificationsAvailable() && chrome.notifications.onClicked) {
+  chrome.notifications.onClicked.addListener((id) => {
+    if (id === POMODORO_NOTIFY_ID) chrome.notifications.clear(id);
+  });
+}
 
 // ============================================================
 // 7. TAB EVENT LISTENERS — immediate time flush on tab switch
