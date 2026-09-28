@@ -225,6 +225,7 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 | `503efef` | 加 HANDOFF.md / CLAUDE.md / streak harness |
 | `ff4ac41` | 番茄钟 + Todo（独立窗口版），见第 8 节 |
 | `e14a4fb` | 修 worker 启动即崩（8.8-4）与拦截重定向失效（8.8-5），补 P13/P14 与真浏览器冒烟测试 |
+| `9d6fbac` | DNR 规则写入串行化（见第 3 节），补 P15/P16 |
 
 ### 已确认未做的事
 
