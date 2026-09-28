@@ -98,12 +98,24 @@ function runLifetime(stores, opts) {
       sync: area(stores.sync),
     },
     declarativeNetRequest: {
-      getDynamicRules: async () => dnrRules.slice(),
+      // Real DNR is an async round trip to the browser process, so overlapping
+      // callers interleave. Modelling that - plus the unique-id rule - is what
+      // lets P15/P16 fail on an unserialized implementation.
+      getDynamicRules: async () => {
+        await new Promise((r) => setImmediate(r));
+        return dnrRules.slice();
+      },
       updateDynamicRules: async (o) => {
-        if (o && o.removeRuleIds) {
-          dnrRules = dnrRules.filter((r) => o.removeRuleIds.indexOf(r.id) === -1);
+        await new Promise((r) => setImmediate(r));
+        const remove = (o && o.removeRuleIds) || [];
+        const add = (o && o.addRules) || [];
+        const next = remove.length ? dnrRules.filter((r) => remove.indexOf(r.id) === -1) : dnrRules.slice();
+        for (const rule of add) {
+          if (next.some((r) => r.id === rule.id)) {
+            throw new Error('Rule with id ' + rule.id + ' does not have a unique ID.');
+          }
         }
-        if (o && o.addRules) dnrRules = dnrRules.concat(o.addRules);
+        dnrRules = next.concat(add);
       },
     },
     tabs: {
@@ -152,14 +164,20 @@ function runLifetime(stores, opts) {
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
 
+  // initialize() chains several async round trips (storage, DNR, alarms) and
+  // the DNR stub models Chrome's real async round trip, so a worker is not
+  // quiet after one or two turns. Wait for a run of idle turns instead of a
+  // fixed count; nothing here advances the clock, so extra turns are harmless.
   async function settle() {
-    for (let i = 0; i < 100; i++) {
+    let idle = 0;
+    for (let i = 0; i < 800 && idle < 12; i++) {
       await new Promise((r) => setImmediate(r));
-      if (timers.length === 0) {
-        await new Promise((r) => setImmediate(r));
-        if (timers.length === 0) return;
+      if (timers.length) {
+        idle = 0;
+        timers.shift()();
+      } else {
+        idle++;
       }
-      timers.shift()();
     }
   }
 
@@ -532,6 +550,65 @@ const scenarios = [
       return [ok, 'startOk=' + !!(r.started && r.started.success) +
         ' phase=' + (r.st && r.st.state && r.st.state.phase) +
         ' notifications=' + (r.st && r.st.notifications)];
+    },
+  },
+  {
+    name: 'P15 a burst of overlapping syncs never collides on a rule id',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [
+          { val: 'example.com', type: 'block', mode: 'website' },
+          { val: 'example.org', type: 'block', mode: 'website' },
+        ],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      // Alarms and tab events are fired without awaiting each other, so this
+      // is exactly what the worker sees on a busy morning.
+      const burst = [];
+      for (let i = 0; i < 8; i++) burst.push(life.sendMessage({ action: 'syncRules' }));
+      await Promise.all(burst);
+      await drain();
+      return { life };
+    },
+    expect: (r) => {
+      const collisions = r.life.logs.filter((l) => l.indexOf('does not have a unique ID') !== -1).length;
+      const ids = r.life.getRules().map((x) => x.id).sort();
+      const ok = collisions === 0 && ids.length === 2 && ids[0] === 1 && ids[1] === 2;
+      return [ok, 'collisions=' + collisions + ' ruleIds=' + JSON.stringify(ids)];
+    },
+  },
+  {
+    name: 'P16 a sync burst cannot leave a stale rule set behind',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [{ val: 'example.com', type: 'timed', mode: 'website', limitMin: 30 }],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      await life.sendMessage({ action: 'pomodoroStart' });
+      const during = [];
+      for (let i = 0; i < 6; i++) during.push(life.sendMessage({ action: 'syncRules' }));
+      await Promise.all(during);
+      await drain();
+      const duringFocus = life.getRules().map((x) => x.id).sort();
+      await life.sendMessage({ action: 'pomodoroStop' });
+      const after = [];
+      for (let i = 0; i < 6; i++) after.push(life.sendMessage({ action: 'syncRules' }));
+      await Promise.all(after);
+      await drain();
+      const afterStop = life.getRules().map((x) => x.id).sort();
+      return { life, duringFocus, afterStop };
+    },
+    expect: (r) => {
+      const collisions = r.life.logs.filter((l) => l.indexOf('does not have a unique ID') !== -1).length;
+      const ok = collisions === 0 &&
+        r.duringFocus.length === 1 && r.duringFocus[0] === 1500000 &&
+        r.afterStop.length === 0;
+      return [ok, 'collisions=' + collisions + ' duringFocus=' + JSON.stringify(r.duringFocus) +
+        ' afterStop=' + JSON.stringify(r.afterStop)];
     },
   },
   {

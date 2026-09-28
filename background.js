@@ -65,7 +65,27 @@ function migrateData() {
 // ============================================================
 // 2. RULE SYNC — keep declarativeNetRequest in sync with storage
 // ============================================================
-async function syncAllRules() {
+
+// Every change to the dynamic rule set goes through this one queue.
+// syncAllRules is called from alarm handlers, tab events and message handlers
+// that Chrome does not serialize against each other. Two overlapping runs both
+// read the current rules before either has added anything, so the second add
+// dies with "Rule with id 1 does not have a unique ID" - and because the run
+// that lands last wins, a stale rule set could survive instead (timed sites
+// staying blocked after the focus session that pinned them had ended).
+let dnrWriteQueue = Promise.resolve();
+function withDnrLock(run) {
+  const queued = dnrWriteQueue.then(run, run);
+  // Keep the chain alive when a run rejects; the caller still sees the error.
+  dnrWriteQueue = queued.then(() => {}, () => {});
+  return queued;
+}
+
+function syncAllRules() {
+  return withDnrLock(syncAllRulesNow);
+}
+
+async function syncAllRulesNow() {
   try {
     // Remove all existing dynamic rules
     const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
@@ -229,7 +249,12 @@ async function trackActiveTab() {
   }
 }
 
-async function enforceTimeLimit(domain, limitMin) {
+// Same lock: this writes to the same dynamic rule set as syncAllRules.
+function enforceTimeLimit(domain, limitMin) {
+  return withDnrLock(() => enforceTimeLimitNow(domain, limitMin));
+}
+
+async function enforceTimeLimitNow(domain, limitMin) {
   // 1. Add DNR rule to block this domain
   const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
   const timedRuleIds = existingRules
@@ -283,7 +308,12 @@ function showWarningNotification(domain, remainingMin) {
 // ============================================================
 // 4. DAILY RESET — fires at 00:01 each day
 // ============================================================
-async function resetDailyLimits() {
+// Same lock again: it removes rules syncAllRules would otherwise re-add.
+function resetDailyLimits() {
+  return withDnrLock(resetDailyLimitsNow);
+}
+
+async function resetDailyLimitsNow() {
   console.log('[Blocker] Running daily reset...');
   const today = getTodayKey();
 
