@@ -15,9 +15,9 @@
 - 用户沟通语言：中文
 - 目录：`D:\软件项目\Blocker`
 
-版本号：`2.0.1`（`manifest.json`），页面角标仍是 `v2.0`。加番茄钟时问过用户该以哪个
+版本号：`2.0.2`（`manifest.json`），页面角标仍是 `v2.0`。加番茄钟时问过用户该以哪个
 为准，他选了「统一为 2.0.0」；后来用户要靠版本号判断 `chrome://extensions` 的 reload
-到底有没有生效，才升到 `2.0.1`。**下次改版本号前仍然先问。**
+到底有没有生效，才一路升到 `2.0.2`。**下次改版本号前仍然先问。**
 
 ## 1. 怎么跑
 
@@ -68,11 +68,15 @@ popup 宽度 350px 走窄版，被重定向到整页时（宽度 > 400px）走�
   **不做串行化**：两个 `syncAllRules` 重叠时会各自先读到「当前规则集」再各自添加，
   后添加的那个直接抛 `Rule with id 1 does not have a unique ID`；更糟的是「后落地者胜」，
   可能留下过期规则（专注期结束后 timed 站点仍被封）。加新的规则写入口时，必须也走这把锁。
-  锁里面，`syncAllRulesNow()` 的「清空 + 安装」是**一次** `updateDynamicRules` 调用
-  （`applyDynamicRules()`），中间没有窗口；万一还是有别的写者插进来（例如 reload 时
-  正在被销毁的旧 worker 落下最后一笔），会重读旧集合并重试一次，而不是直接报错收工。
-  写之前还会按 id 去重；报错日志会带上「想写的 id / 当时磁盘上的 id」，便于定位。
-  启动日志用 `chrome.runtime.getManifest().version` 打印版本，控制台能自证是哪个构建。
+  锁里面，`applyDynamicRules()` 真正落盘：**先删、再写，两次调用**。删除时**除了
+  `getDynamicRules()` 报出来的 id，还显式点名删掉「马上要写的那些 id」** —— Chrome 只要
+  发现同 id 的规则还活着就抛 `Rule with id N does not have a unique ID`，而 API 报出来的
+  集合和真正活着的集合**并不总是同一套**。2026-09-28 用户机器就卡在这里：`syncAllRules`
+  每次都报 id 1 冲突（`chrome://extensions` 的错误卡片指向 `applyDynamicRules` 里的写入），
+  把删除和写入**合并成一次 `updateDynamicRules` 反而必炸**（合并式的语义只覆盖
+  「removed ids ⊇ added ids」的情况）。失败的写入会重试 3 次。写之前按 id 去重；
+  报错日志里带「想写的 id / 当时的 id / 规则列表」，`chrome://extensions` 的错误卡片上
+  直接看得到。启动日志用 `chrome.runtime.getManifest().version` 打印版本，能自证构建。
 - **alarm**：`heartbeat`(1min)、`tracking`(1min)、`dailyReset`(24h，00:01)，
   外加番茄钟的一次性 `pomodoroPhase`（见 8.3）。
 - **番茄钟 / Todo 用另外三个键**（`pomodoro` / `pomodoroSettings` / `todo`），见第 8 节。
@@ -184,14 +188,15 @@ node test/streak-harness.js $env:TEMP\baseline.js        # 应 5/10，失败项�
 真实记账的 DNR 桩：
 
 ```powershell
-node test/pomodoro-harness.js background.js        # 当前版本，应 17/17
+node test/pomodoro-harness.js background.js        # 当前版本，应 18/18
 ```
 
-覆盖 17 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
+覆盖 18 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
 启动重新 arm、并发 tick 只记一次，外加四条回归护栏——P13「`chrome.notifications` 不存在时
 worker 必须照样活着」、P14「`manifest.json` 必须把 `blockpage.html` 列进
 `web_accessible_resources`」、P15「并发的规则同步不能撞 ID」、P16「一波并发同步不能留下
-过期规则集」、P17「写入途中被外部规则插队的冲突要被吞掉并重试，不能只报个错、留下半套规则」。
+过期规则集」、P17「写入途中被外部规则插队的冲突要被吞掉并重试，不能只报个错、留下半套规则」、
+P18「`getDynamicRules()` 没报出来、但其实还活着的 id 也必须被清掉，否则 add 永远撞车」。
 它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。
 
 两个 harness 都跑在 Node 的 `vm` 里，**从不真正加载扩展**，所以抓不到「worker 在注册
@@ -339,7 +344,7 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 
 ### 8.7 验证
 
-见第 5 节：`node test/pomodoro-harness.js background.js`（应 17/17），以及
+见第 5 节：`node test/pomodoro-harness.js background.js`（应 18/18），以及
 `python test/browser-smoke.py`（应 8/8，真浏览器）。
 
 ### 8.8 别踩的坑

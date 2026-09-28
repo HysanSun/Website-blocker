@@ -85,36 +85,54 @@ function syncAllRules() {
   return withDnrLock(syncAllRulesNow);
 }
 
-// Replace the whole dynamic rule set in a single updateDynamicRules call: the
-// removal and the addition are then one browser-process operation, so there is
-// no window in which another writer could slip a conflicting id in between.
-// A worker that is being torn down during an extension reload can still land a
-// late call, so on the unique-id error read the stale set again and retry once.
+// Write the whole dynamic rule set: clear, then install.
+//
+// Chrome rejects an add whose id is still live with "Rule with id N does not
+// have a unique ID", so the removal asks for the ids we are about to add *as
+// well as* everything getDynamicRules() reports. That way the add is safe even
+// if what the API reports and what is actually live disagree.
+//
+// Removal and addition stay two separate calls so the removal has definitely
+// landed before the ids are reused. Callers are serialized by withDnrLock();
+// the retry covers a writer from outside this worker (a worker being torn down
+// during a reload can land a late write).
 async function applyDynamicRules(rulesToAdd) {
-  // Belt and braces: an id appearing twice in one update is an immediate
-  // failure in Chrome, so make that impossible no matter what the caller built.
-  const seen = new Set();
+  // An id appearing twice in one call is an immediate failure in Chrome, so
+  // make that impossible no matter what the caller handed us.
   const unique = [];
+  const wantedIds = [];
+  const seen = new Set();
   for (const rule of rulesToAdd) {
     if (seen.has(rule.id)) {
       console.warn('[Blocker] Dropped a duplicate DNR rule id', rule.id);
       continue;
     }
     seen.add(rule.id);
+    wantedIds.push(rule.id);
     unique.push(rule);
   }
 
-  for (let attempt = 1; ; attempt++) {
-    const stale = await chrome.declarativeNetRequest.getDynamicRules();
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await chrome.declarativeNetRequest.updateDynamicRules({
-        removeRuleIds: stale.map((r) => r.id),
-        addRules: unique
-      });
+      const stale = await chrome.declarativeNetRequest.getDynamicRules();
+      const removeIds = [];
+      const removeSeen = new Set();
+      for (const id of stale.map((r) => r.id).concat(wantedIds)) {
+        if (removeSeen.has(id)) continue;
+        removeSeen.add(id);
+        removeIds.push(id);
+      }
+
+      if (removeIds.length) {
+        await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: removeIds });
+      }
+      if (unique.length) {
+        await chrome.declarativeNetRequest.updateDynamicRules({ addRules: unique });
+      }
       return;
     } catch (err) {
       const retryable = /unique ID/i.test(String((err && err.message) || ''));
-      if (!retryable || attempt >= 2) throw err;
+      if (!retryable || attempt >= 3) throw err;
     }
   }
 }
@@ -192,9 +210,10 @@ async function syncAllRulesNow() {
     await applyDynamicRules(rulesToAdd);
     console.log('[Blocker] Synced', rulesToAdd.length, 'DNR rules');
   } catch (err) {
-    console.error('[Blocker] syncAllRules error:', err,
-      '| wanted rule ids', wantedIds.join(',') || '(none)',
-      '| live rule ids', liveIds.join(',') || '(none)');
+    console.error('[Blocker] syncAllRules error: ' + ((err && err.message) || err) +
+      ' | wanted rule ids [' + (wantedIds.join(',') || 'none') + ']' +
+      ' | live rule ids [' + (liveIds.join(',') || 'none') + ']' +
+      ' | rules [', JSON.stringify(items).slice(0, 400), ']', err);
   }
 }
 

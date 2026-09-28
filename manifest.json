@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Website Blocker",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Strict focus tool with background integrity monitoring.",
   "permissions": [
     "declarativeNetRequest",

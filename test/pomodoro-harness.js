@@ -82,6 +82,10 @@ function runLifetime(stores, opts) {
   let dnrRules = [];
   // Simulates a dying worker landing one last rule write during a reload.
   let sneakRuleId = (opts && 'sneakRuleId' in opts) ? opts.sneakRuleId : null;
+  // Rules that are live but do not show up in getDynamicRules(), which is the
+  // state the extension got stuck in: the add kept colliding with an id the
+  // removal step had never been told about.
+  const hiddenIds = (opts && opts.hiddenRuleIds) || [];
   const L = { startup: [], installed: [], alarm: [], message: [], activated: [], updated: [] };
 
   const chrome = {
@@ -105,11 +109,12 @@ function runLifetime(stores, opts) {
       // lets P15/P16 fail on an unserialized implementation.
       getDynamicRules: async () => {
         await new Promise((r) => setImmediate(r));
-        return dnrRules.slice();
+        return dnrRules.filter((r) => hiddenIds.indexOf(r.id) === -1);
       },
       updateDynamicRules: async (o) => {
         await new Promise((r) => setImmediate(r));
-        if (sneakRuleId !== null) {
+        // A late write from a dying worker lands just before the add.
+        if (sneakRuleId !== null && o && o.addRules) {
           dnrRules = dnrRules.concat([{ id: sneakRuleId, priority: 10, action: {}, condition: {} }]);
           sneakRuleId = null;
         }
@@ -557,6 +562,28 @@ const scenarios = [
       return [ok, 'startOk=' + !!(r.started && r.started.success) +
         ' phase=' + (r.st && r.st.state && r.st.state.phase) +
         ' notifications=' + (r.st && r.st.notifications)];
+    },
+  },
+  {
+    name: 'P18 an id that is live but unlisted is still cleared before the add',
+    run: async () => {
+      NOW = T0;
+      const s = seed({ rules: [{ val: 'example.com', type: 'block', mode: 'website' }] });
+      // Rule 1 is live but getDynamicRules() never reports it, so the removal
+      // step would never ask for it and every add of rule 1 would collide.
+      const life = runLifetime(s, { hiddenRuleIds: [1] });
+      await life.settle();
+      const burst = [];
+      for (let i = 0; i < 4; i++) burst.push(life.sendMessage({ action: 'syncRules' }));
+      await Promise.all(burst);
+      await drain();
+      return { life };
+    },
+    expect: (r) => {
+      const reported = r.life.logs.filter((l) => l.indexOf('syncAllRules error') !== -1).length;
+      const ids = r.life.getRules().map((x) => x.id).sort();
+      const ok = reported === 0 && ids.length === 1 && ids[0] === 1;
+      return [ok, 'reported=' + reported + ' ruleIds=' + JSON.stringify(ids)];
     },
   },
   {
