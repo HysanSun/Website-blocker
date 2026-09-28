@@ -357,7 +357,7 @@ const scenarios = [
     },
   },
   {
-    name: 'P5 pause freezes, resume recomputes, skip and stop record nothing',
+    name: 'P5 pause freezes, resume recomputes, focus refuses to be skipped',
     run: async () => {
       NOW = T0;
       const s = seed({ pomodoro: { phase: 'focus', endAt: T0 + 25 * MIN, startedAt: T0 } });
@@ -378,14 +378,18 @@ const scenarios = [
       return { paused, stillPaused, resumed, skipped, stopped };
     },
     expect: (r) => {
+      // Skipping a focus is refused outright: same phase, same deadline, no
+      // credit. Stopping is the honest way out and records nothing.
       const ok = r.paused.pausedRemainingMs === 25 * MIN && r.paused.endAt === 0 &&
         r.stillPaused.phase === 'focus' && r.stillPaused.pausedRemainingMs === 25 * MIN &&
         r.resumed.endAt === T0 + 10 * MIN + 25 * MIN && r.resumed.pausedRemainingMs === null &&
-        r.skipped.phase === 'shortBreak' && r.skipped.focusToday === 0 && r.skipped.cycleDone === 0 &&
+        r.skipped.phase === 'focus' && r.skipped.endAt === r.resumed.endAt &&
+        r.skipped.focusToday === 0 && r.skipped.cycleDone === 0 &&
         r.stopped.phase === 'idle';
       return [ok, 'paused=' + r.paused.pausedRemainingMs + ' stillPaused=' + r.stillPaused.phase +
-        ' resumedIn=' + ((r.resumed.endAt - (T0 + 10 * MIN)) / MIN) + 'min skip=' + r.skipped.phase +
-        '/today' + r.skipped.focusToday + ' stop=' + r.stopped.phase];
+        ' resumedIn=' + ((r.resumed.endAt - (T0 + 10 * MIN)) / MIN) + 'min skipRefused=' + r.skipped.phase +
+        '/' + ((r.skipped.endAt - (T0 + 10 * MIN)) / MIN) + 'min today' + r.skipped.focusToday +
+        ' stop=' + r.stopped.phase];
     },
   },
   {
@@ -772,6 +776,171 @@ const scenarios = [
         redirected >= 1 && errors === 0;
       return [ok, 'before=' + JSON.stringify(r.before) + ' during=' + JSON.stringify(r.during) +
         ' after=' + JSON.stringify(r.after) + ' redirects=' + redirected + ' errors=' + errors];
+    },
+  },
+  {
+    name: 'P21 a planned run walks its units and asks once the estimate is reached',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        tasks: [{ id: 't1', text: 'Write the report', done: false, createdAt: T0, doneAt: 0,
+          pomodoros: 0, focusMs: 0, plannedUnits: 2 }],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      await life.sendMessage({ action: 'pomodoroStart', taskId: 't1', units: 2, planUnits: 2 });
+      const started = snap(s);
+      const phases = [];
+      const step = async (ms) => {
+        advance(ms);
+        await life.sendMessage({ action: 'pomodoroTick' });
+        phases.push(s.local.pomodoro.phase);
+      };
+      await step(25 * MIN);   // focus 1 -> break
+      await step(5 * MIN);    // break   -> focus 2, on its own
+      await step(25 * MIN);   // focus 2 -> break
+      await step(5 * MIN);    // break   -> run over
+      const p = snap(s);
+      const task = s.local.todo.tasks[0];
+      return { started, phases, p, task };
+    },
+    expect: (r) => {
+      // The default settings do NOT auto-start the next focus; inside a run it
+      // has to happen anyway, or "run until it is done" would be a lie.
+      const ok = JSON.stringify(r.phases) === '["shortBreak","focus","shortBreak","idle"]' &&
+        r.started.run && r.started.run.units === 2 &&
+        r.task.pomodoros === 2 && r.task.focusMs === 50 * MIN &&
+        r.p.run === null && r.p.review && r.p.review.taskId === 't1' &&
+        r.p.focusToday === 2;
+      return [ok, 'phases=' + JSON.stringify(r.phases) + ' pomodoros=' + r.task.pomodoros +
+        ' focusToday=' + r.p.focusToday + ' review=' + JSON.stringify(r.p.review) +
+        ' run=' + JSON.stringify(r.p.run)];
+    },
+  },
+  {
+    name: 'P22 focus is not skippable, the breaks around it are',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        tasks: [{ id: 't1', text: 'Write', done: false, createdAt: T0, doneAt: 0,
+          pomodoros: 0, focusMs: 0, plannedUnits: 1 }],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      await life.sendMessage({ action: 'pomodoroStart', taskId: 't1', units: 1, planUnits: 1 });
+      await life.sendMessage({ action: 'pomodoroSkip' });
+      const duringFocus = snap(s);
+      advance(25 * MIN);
+      await life.sendMessage({ action: 'pomodoroTick' });
+      const atBreak = snap(s);
+      await life.sendMessage({ action: 'pomodoroSkip' });
+      const afterBreak = snap(s);
+      return { duringFocus, atBreak, afterBreak };
+    },
+    expect: (r) => {
+      // Skipping the last break of the run is how you get to the question
+      // without waiting out the break.
+      const ok = r.duringFocus.phase === 'focus' && r.duringFocus.endAt === T0 + 25 * MIN &&
+        r.atBreak.phase === 'shortBreak' && r.atBreak.focusToday === 1 &&
+        r.afterBreak.phase === 'idle' && r.afterBreak.run === null &&
+        r.afterBreak.review && r.afterBreak.review.taskId === 't1';
+      return [ok, 'focusSkip=' + r.duringFocus.phase + '@' + r.duringFocus.endAt +
+        ' break=' + r.atBreak.phase + ' afterBreakSkip=' + r.afterBreak.phase +
+        ' review=' + JSON.stringify(r.afterBreak.review)];
+    },
+  },
+  {
+    name: 'P23 a run shorter than the estimate ends quietly, without asking anything',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        tasks: [{ id: 't1', text: 'Write', done: false, createdAt: T0, doneAt: 0,
+          pomodoros: 0, focusMs: 0, plannedUnits: 4 }],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      // Two of the four planned units: the run is over at unit 2 and the
+      // estimate is NOT reached, so there is no question to ask.
+      await life.sendMessage({ action: 'pomodoroStart', taskId: 't1', units: 2, planUnits: 4 });
+      const step = async (ms) => {
+        advance(ms);
+        await life.sendMessage({ action: 'pomodoroTick' });
+      };
+      await step(25 * MIN); await step(5 * MIN);
+      await step(25 * MIN); await step(5 * MIN);
+      const p = snap(s);
+      const task = s.local.todo.tasks[0];
+      return { p, task };
+    },
+    expect: (r) => {
+      const ok = r.p.phase === 'idle' && r.p.run === null && r.p.review === null &&
+        r.task.pomodoros === 2 && r.task.plannedUnits === 4;
+      return [ok, 'phase=' + r.p.phase + ' review=' + JSON.stringify(r.p.review) +
+        ' pomodoros=' + r.task.pomodoros + ' plannedUnits=' + r.task.plannedUnits];
+    },
+  },
+  {
+    name: 'P24 the review answers: done archives, later keeps, a new plan continues',
+    run: async () => {
+      const mk = () => seed({
+        tasks: [{ id: 't1', text: 'Report', done: false, createdAt: T0, doneAt: 0,
+          pomodoros: 2, focusMs: 50 * MIN, plannedUnits: 2 }],
+        pomodoro: { review: { taskId: 't1', at: T0 } },
+      });
+      NOW = T0;
+      const s1 = mk(); const l1 = runLifetime(s1); await l1.settle();
+      await l1.sendMessage({ action: 'pomodoroReviewAnswer', mode: 'done' });
+      const done = { review: s1.local.pomodoro.review, task: s1.local.todo.tasks[0] };
+
+      NOW = T0;
+      const s2 = mk(); const l2 = runLifetime(s2); await l2.settle();
+      await l2.sendMessage({ action: 'pomodoroReviewAnswer', mode: 'later' });
+      const later = { review: s2.local.pomodoro.review, task: s2.local.todo.tasks[0] };
+
+      NOW = T0;
+      const s3 = mk(); const l3 = runLifetime(s3); await l3.settle();
+      // "not finished" -> re-plan. Two units are already recorded, so a plan
+      // of 1 has to be clamped up to 2 - an estimate below the work done would
+      // make "the estimate is reached" unreachable forever.
+      await l3.sendMessage({ action: 'pomodoroStart', taskId: 't1', units: 1, planUnits: 1 });
+      const cont = { review: s3.local.pomodoro.review, task: s3.local.todo.tasks[0],
+        phase: s3.local.pomodoro.phase, run: s3.local.pomodoro.run };
+      return { done, later, cont };
+    },
+    expect: (r) => {
+      const ok = r.done.review === null && r.done.task.done === true && r.done.task.doneAt > 0 &&
+        r.later.review === null && r.later.task.done === false &&
+        r.cont.review === null && r.cont.task.plannedUnits === 2 && r.cont.phase === 'focus' &&
+        r.cont.run && r.cont.run.units === 1;
+      return [ok, 'done=' + r.done.task.done + '/review' + r.done.review +
+        ' later=' + r.later.task.done + '/review' + r.later.review +
+        ' cont=plan' + r.cont.task.plannedUnits + '/' + r.cont.phase + '/units' + (r.cont.run && r.cont.run.units)];
+    },
+  },
+  {
+    name: 'P25 stopping mid-run spends nothing and leaves no question behind',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        tasks: [{ id: 't1', text: 'Write', done: false, createdAt: T0, doneAt: 0,
+          pomodoros: 0, focusMs: 0, plannedUnits: 2 }],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      await life.sendMessage({ action: 'pomodoroStart', taskId: 't1', units: 2, planUnits: 2 });
+      advance(25 * MIN);
+      await life.sendMessage({ action: 'pomodoroTick' });   // focus 1 credited -> break
+      await life.sendMessage({ action: 'pomodoroStop' });
+      const p = snap(s);
+      const task = s.local.todo.tasks[0];
+      return { p, task };
+    },
+    expect: (r) => {
+      const ok = r.p.phase === 'idle' && r.p.run === null && r.p.review === null &&
+        r.p.focusToday === 1 && r.task.pomodoros === 1 && r.task.plannedUnits === 2;
+      return [ok, 'phase=' + r.p.phase + ' run=' + JSON.stringify(r.p.run) +
+        ' review=' + JSON.stringify(r.p.review) + ' today=' + r.p.focusToday +
+        ' pomodoros=' + r.task.pomodoros + '/' + r.task.plannedUnits];
     },
   },
 ];

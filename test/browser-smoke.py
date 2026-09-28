@@ -108,6 +108,31 @@ def main():
             page.click("#stop-btn")
             page.wait_for_timeout(800)
 
+            # 3b. Planning a run: the play button on a task asks how many units
+            # to spend, "All" fills what is left of the estimate, and starting it
+            # puts the worker in a multi-unit run that cannot be skipped.
+            page.click("#task-list .task .play")
+            page.wait_for_selector("#plan-modal:not([hidden])", timeout=5000)
+            check("the play button opens the plan dialog",
+                  page.eval_on_selector("#plan-title", "e=>e.textContent") == "smoke task")
+            page.fill("#plan-estimate", "3")
+            page.wait_for_timeout(150)
+            page.click("#plan-all")
+            units = page.eval_on_selector("#plan-units", "e=>e.value")
+            check("All fills the units left in the estimate", units == "3", "units=" + units)
+            page.click("#plan-start")
+            page.wait_for_timeout(1200)
+            run = sw.evaluate("async () => JSON.stringify((await chrome.storage.local.get(['pomodoro'])).pomodoro.run)")
+            check("starting a planned run records the run on the worker",
+                  '"units":3' in run.replace(" ", ""), run[:120])
+            stored_todo = sw.evaluate("async () => JSON.stringify((await chrome.storage.local.get(['todo'])).todo.tasks)")
+            check("the estimate is saved on the task",
+                  '"plannedUnits":3' in stored_todo.replace(" ", ""), stored_todo[:160])
+            check("a focus session cannot be skipped",
+                  page.eval_on_selector("#skip-btn", "e=>e.disabled") is True)
+            page.click("#stop-btn")
+            page.wait_for_timeout(800)
+
             # 4. Blocking: a DNR redirect must land on blockpage.html.
             probe = ctx.new_page()
             online = True
@@ -157,6 +182,76 @@ def main():
             rules = sw.evaluate("async () => JSON.stringify(await chrome.declarativeNetRequest.getDynamicRules())")
             check("a burst of rule syncs leaves exactly one rule per blocked site",
                   rules.count('"id":1') == 1 and "example.com" in rules, rules[:140])
+
+            # 7. The review question and the skip rule. Waiting out a real
+            # 25 + 5 minute run is not a smoke test, so seed the worker state
+            # that a finished run would have left behind and drive the UI.
+            page2 = ctx.new_page()
+            page2.on("pageerror", lambda e: (errors.append(str(e)), print("  [page error] %s" % e)))
+            page2.goto("chrome-extension://%s/pomodoro.html" % ext_id)
+            page2.wait_for_timeout(600)
+            task_id = page2.evaluate("""async () => {
+                const t = (await chrome.storage.local.get(['todo'])).todo.tasks.find(x => x.text === 'smoke task');
+                return t ? t.id : null;
+            }""")
+            check("the smoke task survives for the review check", bool(task_id))
+            seed_review = """(id) => new Promise(res => chrome.storage.local.set({pomodoro: {
+                v: 1, phase: 'idle', endAt: 0, startedAt: 0, pausedRemainingMs: null, cycleDone: 0,
+                dayKey: '', focusToday: 2, focusMsToday: 0, taskId: id, strictNow: false,
+                run: null, review: {taskId: id, at: Date.now()}
+            }}, res))"""
+            page2.evaluate(seed_review, task_id)
+            page2.reload()
+            page2.wait_for_timeout(900)
+            check("the review card asks about the task",
+                  page2.eval_on_selector("#review-card", "e=>e.hidden") is False)
+            check("the review card names the task",
+                  "smoke task" in page2.eval_on_selector("#review-text", "e=>e.textContent"))
+
+            # "Not yet" clears the question and re-opens the plan dialog.
+            page2.click("#review-continue")
+            page2.wait_for_timeout(900)
+            check("answering 'Not yet' reopens the plan dialog",
+                  page2.eval_on_selector("#plan-modal", "e=>e.hidden") is False)
+            page2.click("#plan-cancel")
+            page2.wait_for_timeout(300)
+
+            # "Yes, it's done" archives the task.
+            page2.evaluate(seed_review, task_id)
+            page2.reload()
+            page2.wait_for_timeout(900)
+            page2.click("#review-done")
+            page2.wait_for_timeout(900)
+            archived = sw.evaluate("""async () => (await chrome.storage.local.get(['todo'])).todo.tasks[0].done === true""")
+            check("answering 'done' archives the task", archived)
+            check("the archived task shows up under Done",
+                  "smoke task" in page2.eval_on_selector("#done-list", "e=>e.textContent"))
+
+            # A focus session refuses to be skipped; a break does not.
+            page2.evaluate("() => new Promise(res => chrome.runtime.sendMessage({action:'pomodoroStart'}, res))")
+            page2.wait_for_timeout(600)
+            skipped = page2.evaluate("""() => new Promise(res => chrome.runtime.sendMessage(
+                {action:'pomodoroSkip'}, r => res(r && r.state ? r.state.phase : null)))""")
+            check("the worker refuses to skip a focus session", skipped == "focus", "phase=" + str(skipped))
+            check("the skip button is disabled while focusing",
+                  page2.eval_on_selector("#skip-btn", "e=>e.disabled") is True)
+            page2.evaluate("() => new Promise(res => chrome.runtime.sendMessage({action:'pomodoroStop'}, res))")
+            page2.wait_for_timeout(400)
+            page2.evaluate("""() => new Promise(res => chrome.storage.local.set({pomodoro: {
+                v: 1, phase: 'shortBreak', endAt: Date.now() + 60000, startedAt: Date.now(),
+                pausedRemainingMs: null, cycleDone: 1, dayKey: '', focusToday: 1, focusMsToday: 0,
+                taskId: null, strictNow: false, run: null, review: null
+            }}, res))""")
+            page2.reload()
+            page2.wait_for_timeout(900)
+            check("the skip button is live on a break",
+                  page2.eval_on_selector("#skip-btn", "e=>e.disabled") is False)
+            page2.click("#skip-btn")
+            page2.wait_for_timeout(900)
+            after_skip = sw.evaluate("async () => (await chrome.storage.local.get(['pomodoro'])).pomodoro.phase")
+            check("skipping a break moves the worker on without crediting it",
+                  after_skip in ("idle", "focus"), "phase=" + str(after_skip))
+            page2.evaluate("() => new Promise(res => chrome.runtime.sendMessage({action:'pomodoroStop'}, res))")
 
             # Give any tab/alarm-driven rule sync a chance to blow up.
             entry.wait_for_timeout(2000)

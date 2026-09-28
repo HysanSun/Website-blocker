@@ -516,7 +516,14 @@ const POMODORO_STATE_DEFAULTS = {
   focusToday: 0,
   focusMsToday: 0,
   taskId: null,
-  strictNow: false
+  strictNow: false,
+  // A run is the multi-unit commitment the user starts from a task row:
+  // { taskId, units, focusDone }. It survives worker recycling because it is
+  // part of the state, and it is what makes the timer keep going on its own.
+  run: null,
+  // Pending question: { taskId, at } - the task reached its planned units, ask
+  // whether the work is actually finished. Cleared by answering it.
+  review: null
 };
 
 // Overlapping async calls (a per-second popup tick landing on top of the
@@ -564,7 +571,8 @@ async function getPomodoroState() {
 async function writePomodoroState(state, settings) {
   const s = settings || await getPomodoroSettings();
   // Pausing does NOT lift the strictness: the promise of this tool is that you
-  // cannot negotiate with it. Only an explicit stop or skip leaves focus mode.
+  // cannot negotiate with it. Only an explicit stop leaves focus mode - a focus
+  // session cannot be skipped at all (see pomodoroSkip).
   state.strictNow = (state.phase === 'focus' && !!s.focusBlocksTimed);
   state.v = 1;
   state.dayKey = getTodayKey();
@@ -650,13 +658,18 @@ function notifyPomodoroPhase(fromPhase, toPhase, lateMs, settings) {
 async function pomodoroEnterNextPhase(state, settings, now, credit) {
   const from = state.phase;
   let next = 'idle';
+  // A run is an explicit commitment to N units, so it keeps itself going even
+  // when the auto-start settings are off - that is what "run until it is done"
+  // means. Breaks stay skippable; focus does not (see pomodoroSkip).
+  const run = (state.run && state.run.taskId) ? state.run : null;
 
   if (from === 'focus') {
     if (credit) {
       state.cycleDone += 1;
       state.focusToday += 1;
       state.focusMsToday += settings.focusMin * 60 * 1000;
-      await creditTaskFocus(state.taskId, settings.focusMin);
+      await creditTaskFocus(run ? run.taskId : state.taskId, settings.focusMin);
+      if (run) run.focusDone = (run.focusDone || 0) + 1;
     }
     const cycles = Math.max(1, settings.cyclesUntilLongBreak);
     // A skipped focus has nothing to show for it, so it must never earn the
@@ -664,13 +677,24 @@ async function pomodoroEnterNextPhase(state, settings, now, credit) {
     // hand out a long break on the very first skip.
     const longBreakDue = credit && state.cycleDone > 0 && (state.cycleDone % cycles === 0);
     next = longBreakDue ? 'longBreak' : 'shortBreak';
-    if (!settings.autoStartBreak) next = 'idle';
-  } else if (from === 'shortBreak') {
-    next = settings.autoStartFocus ? 'focus' : 'idle';
-  } else if (from === 'longBreak') {
+    if (!settings.autoStartBreak && !run) next = 'idle';
+  } else if (from === 'shortBreak' || from === 'longBreak') {
     // A long break closes the cycle, whether it ran out or was skipped.
-    state.cycleDone = 0;
-    next = settings.autoStartFocus ? 'focus' : 'idle';
+    if (from === 'longBreak') state.cycleDone = 0;
+    if (run) {
+      if ((run.focusDone || 0) < run.units) {
+        next = 'focus';
+      } else {
+        // The run is spent: its last unit ended with this break. Ask about the
+        // task only now, so the unit the user planned really did include the
+        // break they just took.
+        state.run = null;
+        next = 'idle';
+        await maybeOpenReview(state, run.taskId);
+      }
+    } else {
+      next = settings.autoStartFocus ? 'focus' : 'idle';
+    }
   }
 
   state.pausedRemainingMs = null;
@@ -740,16 +764,32 @@ async function pomodoroStatus() {
   };
 }
 
-async function pomodoroStart(taskId) {
+// `units` starts a planned run on that task - N units, and a review question
+// when the task's estimate is reached. Without `units` this is the plain single
+// session the Start button has always started.
+async function pomodoroStart(taskId, units, planUnits) {
   const [settings, state] = await Promise.all([getPomodoroSettings(), getPomodoroState()]);
   const now = Date.now();
+  // No taskId in the message means keep the current selection; an explicit
+  // null means clear it.
+  if (taskId !== undefined) state.taskId = taskId || null;
+
+  let run = null;
+  if (state.taskId && units !== undefined && units !== null) {
+    if (planUnits !== undefined && planUnits !== null) {
+      await setTaskPlan(state.taskId, planUnits);
+    }
+    run = { taskId: state.taskId, units: sanitizeUnits(units, 1), focusDone: 0 };
+    // Starting a run on the task the question is about answers that question by
+    // acting on it; a plain session leaves it pending.
+    if (state.review && state.review.taskId === run.taskId) state.review = null;
+  }
+
+  state.run = run;
   state.phase = 'focus';
   state.startedAt = now;
   state.endAt = now + settings.focusMin * 60 * 1000;
   state.pausedRemainingMs = null;
-  // No taskId in the message means keep the current selection; an explicit
-  // null means clear it.
-  if (taskId !== undefined) state.taskId = taskId || null;
   return writePomodoroState(state, settings);
 }
 
@@ -773,9 +813,14 @@ async function pomodoroResume() {
 
 // Skip moves on without recording anything. Stop drops back to idle and keeps
 // the cycle position: both are user decisions, not tamper signals.
+//
+// Focus is deliberately NOT skippable - the promise of the timer is that a
+// running session has to be seen through, and Stop is the honest way out (it
+// records nothing). Breaks stay skippable, including the last break of a run,
+// which is how you get to the "is it finished?" question early.
 async function pomodoroSkip() {
   const state = await getPomodoroState();
-  if (state.phase === 'idle') return writePomodoroState(state);
+  if (state.phase === 'idle' || state.phase === 'focus') return writePomodoroState(state);
   const settings = await getPomodoroSettings();
   state.pausedRemainingMs = null;
   await pomodoroEnterNextPhase(state, settings, Date.now(), false);
@@ -788,6 +833,21 @@ async function pomodoroStop() {
   state.endAt = 0;
   state.startedAt = 0;
   state.pausedRemainingMs = null;
+  // Giving up on the session gives up on its run as well: the units it had left
+  // were never spent and nothing was credited for the part that did run.
+  state.run = null;
+  return writePomodoroState(state);
+}
+
+// The three answers to "is this finished?". Only 'done' touches the task;
+// 'continue' just clears the question, and the page then asks how many more
+// units to plan (that answer comes back through pomodoroStart).
+async function pomodoroReviewAnswer(mode) {
+  const state = await getPomodoroState();
+  const review = state.review;
+  if (!review) return writePomodoroState(state);
+  if (mode === 'done') await setTaskDone(review.taskId, true);
+  state.review = null;
   return writePomodoroState(state);
 }
 
@@ -796,6 +856,13 @@ async function pomodoroStop() {
 function normalizeTodo(raw) {
   const todo = (raw && typeof raw === 'object') ? raw : {};
   if (!Array.isArray(todo.tasks)) todo.tasks = [];
+  // Tasks written before plans existed have no plannedUnits; treat every
+  // missing/garbage value as "no estimate yet" instead of NaN arithmetic.
+  for (const task of todo.tasks) {
+    if (!task) continue;
+    const planned = Number(task.plannedUnits);
+    task.plannedUnits = (isFinite(planned) && planned > 0) ? Math.round(planned) : 0;
+  }
   todo.v = 1;
   return todo;
 }
@@ -840,6 +907,65 @@ async function creditTaskFocus(taskId, focusMin) {
   await saveTodo(todo);
 }
 
+// --- task plans and runs -------------------------------------------------
+// A unit is one focus session plus its break - the block the user plans in -
+// so everything here counts units, never milliseconds.
+
+function sanitizeUnits(value, fallback) {
+  const n = Number(value);
+  if (!isFinite(n) || n <= 0) return fallback;
+  return Math.min(99, Math.max(1, Math.round(n)));
+}
+
+function taskPlannedUnits(task) {
+  const n = Number(task && task.plannedUnits);
+  return (isFinite(n) && n > 0) ? Math.round(n) : 0;
+}
+
+function taskCreditedUnits(task) {
+  const n = Number(task && task.pomodoros);
+  return (isFinite(n) && n > 0) ? Math.round(n) : 0;
+}
+
+// The estimate may be raised or lowered, but never below the work already
+// recorded for the task: that would make "the estimate is reached" - the moment
+// the review question fires - impossible to get to again.
+async function setTaskPlan(taskId, units) {
+  const todo = await getTodo();
+  const task = findTask(todo, taskId);
+  if (!task) return null;
+  const planned = Math.max(taskCreditedUnits(task),
+    sanitizeUnits(units, taskPlannedUnits(task) || 1));
+  task.plannedUnits = planned;
+  await saveTodo(todo);
+  return task;
+}
+
+async function setTaskDone(taskId, done) {
+  const todo = await getTodo();
+  const task = findTask(todo, taskId);
+  if (!task) return null;
+  if (!!task.done !== !!done) {
+    task.done = !!done;
+    task.doneAt = done ? Date.now() : 0;
+  }
+  await saveTodo(todo);
+  return task;
+}
+
+// Reaching the estimate is the moment to ask instead of rolling on silently. A
+// task that was deleted mid-run simply has nobody to ask.
+async function maybeOpenReview(state, taskId) {
+  if (!taskId) return;
+  const todo = await getTodo();
+  const task = findTask(todo, taskId);
+  if (!task) return;
+  const planned = taskPlannedUnits(task);
+  if (planned > 0 && taskCreditedUnits(task) >= planned) {
+    state.review = { taskId: taskId, at: Date.now() };
+  }
+}
+
 async function todoAdd(text) {
   const clean = sanitizeTaskText(text);
   if (!clean) return { ok: false, todo: await getTodo() };
@@ -851,7 +977,8 @@ async function todoAdd(text) {
     createdAt: Date.now(),
     doneAt: 0,
     pomodoros: 0,
-    focusMs: 0
+    focusMs: 0,
+    plannedUnits: 0
   });
   return { ok: true, todo: await saveTodo(todo) };
 }
@@ -976,9 +1103,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
       case 'pomodoroStart': {
-        await pomodoroStart(message.taskId);
+        await pomodoroStart(message.taskId, message.units, message.planUnits);
         await pomodoroAfterChange();
-        sendResponse(Object.assign({ success: true }, await pomodoroStatus()));
+        sendResponse(Object.assign({ success: true, tasks: (await getTodo()).tasks },
+          await pomodoroStatus()));
+        break;
+      }
+      case 'pomodoroReviewAnswer': {
+        await pomodoroReviewAnswer(message.mode);
+        await pomodoroAfterChange();
+        sendResponse(Object.assign({ success: true, tasks: (await getTodo()).tasks },
+          await pomodoroStatus()));
         break;
       }
       case 'pomodoroPause': {

@@ -28,12 +28,30 @@
     var settingsPanel = el('settings-panel');
     var settingsCaret = el('settings-caret');
     var saveSettingsBtn = el('save-settings');
+    var runLine = el('run-line');
+    var focusNote = el('focus-note');
+    var reviewCard = el('review-card');
+    var reviewText = el('review-text');
+    var reviewDone = el('review-done');
+    var reviewContinue = el('review-continue');
+    var reviewLater = el('review-later');
+    var planModal = el('plan-modal');
+    var planTitle = el('plan-title');
+    var planSub = el('plan-sub');
+    var planEstimate = el('plan-estimate');
+    var planUnits = el('plan-units');
+    var planHint = el('plan-hint');
+    var planAll = el('plan-all');
+    var planAllN = el('plan-all-n');
+    var planStart = el('plan-start');
+    var planCancel = el('plan-cancel');
 
     var state = null;
     var settings = null;
     var tasks = [];
     var tickInFlight = false;
     var editingId = null;
+    var planTaskId = null;
 
     // ------------------------------------------------------------
     // Helpers
@@ -60,6 +78,13 @@
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    function taskById(id) {
+        for (var i = 0; i < tasks.length; i++) {
+            if (tasks[i] && tasks[i].id === id) return tasks[i];
+        }
+        return null;
     }
 
     function isPaused(s) {
@@ -110,8 +135,24 @@
         taskLine.textContent = task ? task.text : (running ? 'No task selected' : '');
 
         primaryBtn.textContent = !running ? 'Start' : (isPaused(state) ? 'Resume' : 'Pause');
-        skipBtn.disabled = !running;
         stopBtn.disabled = !running;
+        // Only breaks can be skipped. A focus session has to be seen through;
+        // Stop is the honest way out of one (it records nothing).
+        skipBtn.disabled = !running || state.phase === 'focus';
+        skipBtn.title = state.phase === 'focus'
+            ? 'A focus session cannot be skipped. Use Stop to give it up.'
+            : 'Skip the rest of this break';
+        focusNote.hidden = state.phase !== 'focus';
+
+        var run = state.run;
+        if (run && run.taskId) {
+            var doneUnits = run.focusDone || 0;
+            runLine.textContent = 'This run: ' + doneUnits + ' of ' + run.units + ' units done' +
+                (state.phase === 'focus' ? ' \u00B7 unit ' + Math.min(run.units, doneUnits + 1) : '');
+            runLine.hidden = false;
+        } else {
+            runLine.hidden = true;
+        }
 
         todayLine.textContent = 'Today: ' + state.focusToday + ' sessions \u00B7 ' +
             Math.round(state.focusMsToday / 60000) + ' min';
@@ -130,7 +171,11 @@
 
         html += '<span class="text" data-act="rename" title="Double-click to rename">' +
             escapeHtml(t.text) + '</span>';
-        html += '<span class="meta">' + (t.pomodoros || 0) + ' \uD83C\uDF45 \u00B7 ' +
+        var credited = t.pomodoros || 0;
+        var planned = t.plannedUnits || 0;
+        html += '<span class="meta"' + (isDone ? '' : ' data-act="plan"') +
+            ' title="' + (isDone ? '' : 'Click to plan this task') + '">' +
+            credited + (planned > 0 ? '/' + planned : '') + ' \uD83C\uDF45 \u00B7 ' +
             Math.round((t.focusMs || 0) / 60000) + ' min</span>';
 
         if (!isDone) {
@@ -178,6 +223,86 @@
     }
 
     // ------------------------------------------------------------
+    // Review: the planned units are spent - ask about the task
+    // ------------------------------------------------------------
+    function renderReview() {
+        if (!reviewCard) return;
+        var review = state && state.review;
+        var task = review ? taskById(review.taskId) : null;
+        if (!task || task.done) {
+            reviewCard.hidden = true;
+            return;
+        }
+        var credited = task.pomodoros || 0;
+        reviewText.textContent = '\u201C' + task.text + '\u201D reached the ' + credited +
+            ' unit(s) you planned. Is it finished?';
+        reviewCard.hidden = false;
+    }
+
+    function answerReview(mode, thenPlan) {
+        var id = (state && state.review) ? state.review.taskId : null;
+        send({ action: 'pomodoroReviewAnswer', mode: mode })
+            .then(applyStatus)
+            .then(applyTasks)
+            .then(function () {
+                // "Not yet" means the user wants to re-plan: the dialog opens
+                // with the estimate one unit above what is already credited.
+                if (thenPlan && id) openPlanDialog(id);
+            });
+    }
+
+    // ------------------------------------------------------------
+    // Plan dialog: one row per task, "how many units is this worth?"
+    // ------------------------------------------------------------
+    function planCap(task, estimate) {
+        var credited = (task && task.pomodoros) || 0;
+        var planned = (isFinite(estimate) && estimate > 0) ? estimate : 1;
+        return Math.max(1, planned - credited);
+    }
+
+    function syncPlanDialog() {
+        var task = taskById(planTaskId);
+        var estimate = parseInt(planEstimate.value, 10);
+        if (!isFinite(estimate) || estimate < 1) estimate = 1;
+        planEstimate.value = estimate;
+        var cap = planCap(task, estimate);
+        var units = parseInt(planUnits.value, 10);
+        if (!isFinite(units) || units < 1) units = cap;
+        if (units > cap) units = cap;
+        planUnits.value = units;
+        planUnits.max = cap;
+        planAllN.textContent = cap;
+        var credited = (task && task.pomodoros) || 0;
+        planHint.textContent = '1 unit = ' + settings.focusMin + ' min focus + ' +
+            settings.shortBreakMin + ' min break. ' + credited + ' unit(s) already credited.';
+    }
+
+    function openPlanDialog(taskId) {
+        var task = taskById(taskId);
+        // One timer at a time: starting a run replaces whatever is running, and
+        // silently resetting a live session is never what the user meant.
+        if (!task || !state || state.phase !== 'idle') return;
+        planTaskId = taskId;
+        var credited = task.pomodoros || 0;
+        var planned = task.plannedUnits || 0;
+        planTitle.textContent = task.text;
+        planSub.textContent = planned > 0
+            ? 'Planned ' + planned + ' unit(s), ' + credited + ' credited.'
+            : 'No estimate yet: how many units is this task worth?';
+        planEstimate.value = planned > 0 ? Math.max(planned, credited + 1) : Math.max(1, credited + 1);
+        planUnits.value = planCap(task, parseInt(planEstimate.value, 10));
+        syncPlanDialog();
+        planModal.hidden = false;
+        planUnits.focus();
+        planUnits.select();
+    }
+
+    function closePlanDialog() {
+        planModal.hidden = true;
+        planTaskId = null;
+    }
+
+    // ------------------------------------------------------------
     // Data flow
     // ------------------------------------------------------------
     function applyStatus(res) {
@@ -185,6 +310,7 @@
             state = res.state;
             settings = res.settings;
             renderTimer();
+            renderReview();
             // Notifications are optional: Chrome only hands over the API once
             // the permission is granted, and reloading an unpacked extension
             // after adding one does not grant it. Say so instead of going
@@ -199,6 +325,7 @@
             tasks = res.tasks;
             renderTasks();
             renderTimer();
+            renderReview();
         }
         return res;
     }
@@ -257,8 +384,8 @@
                     var target = e.target.closest ? e.target.closest('[data-act]') : null;
                     if (!target) return;
                     var act1 = target.getAttribute('data-act');
-                    if (act1 === 'play') {
-                        act('pomodoroStart', { taskId: id }).then(function () { renderTimer(); });
+                    if (act1 === 'play' || act1 === 'plan') {
+                        openPlanDialog(id);
                     } else if (act1 === 'toggle') {
                         send({ action: 'todoToggle', id: id }).then(applyTasks);
                     } else if (act1 === 'up') {
@@ -296,6 +423,41 @@
 
     skipBtn.addEventListener('click', function () { act('pomodoroSkip'); });
     stopBtn.addEventListener('click', function () { act('pomodoroStop'); });
+
+    reviewDone.addEventListener('click', function () { answerReview('done'); });
+    reviewContinue.addEventListener('click', function () { answerReview('continue', true); });
+    reviewLater.addEventListener('click', function () { answerReview('later'); });
+
+    planEstimate.addEventListener('input', syncPlanDialog);
+    planUnits.addEventListener('input', syncPlanDialog);
+    planAll.addEventListener('click', function () {
+        planUnits.value = planAllN.textContent;
+        syncPlanDialog();
+    });
+    planCancel.addEventListener('click', closePlanDialog);
+    planModal.addEventListener('click', function (e) {
+        if (e.target === planModal) closePlanDialog();
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !planModal.hidden) closePlanDialog();
+    });
+    planStart.addEventListener('click', function () {
+        if (!planTaskId) return;
+        var task = taskById(planTaskId);
+        var credited = (task && task.pomodoros) || 0;
+        var estimate = parseInt(planEstimate.value, 10);
+        if (!isFinite(estimate) || estimate < 1) estimate = 1;
+        if (estimate < credited) estimate = credited;
+        var units = parseInt(planUnits.value, 10);
+        if (!isFinite(units) || units < 1) units = 1;
+        var cap = planCap(task, estimate);
+        if (units > cap) units = cap;
+        var id = planTaskId;
+        closePlanDialog();
+        send({ action: 'pomodoroStart', taskId: id, units: units, planUnits: estimate })
+            .then(applyStatus)
+            .then(applyTasks);
+    });
 
     taskAdd.addEventListener('click', addTask);
     taskInput.addEventListener('keydown', function (e) {
