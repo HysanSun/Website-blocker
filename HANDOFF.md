@@ -19,6 +19,11 @@
 为准，他选了「统一为 2.0.0」；后来用户要靠版本号判断 `chrome://extensions` 的 reload
 到底有没有生效，才一路升到 `2.0.2`。**下次改版本号前仍然先问。**
 
+本轮（2026-09-28 下午）用户报「版本已经是 2.0.2 了，错误卡片还在」。查下来的结论是两件事：
+① 那张卡片是**陈旧记录**（错误确实抛过，但抛它的是 2.0.1，reload 不会清掉卡片，见 8.8-6）；
+② 真正的功能性事故是 2.0.1 引入、2.0.2 仍在的 `syncAllRulesNow()` catch 里 `items` 越界
+引用（见 8.8-7）。两处都已修，**版本号这次没有动 —— 要不要升 `2.0.3` 得先问用户**。
+
 ## 1. 怎么跑
 
 **没有构建步骤、没有 `package.json`、没有任何依赖。** 纯静态文件。
@@ -65,18 +70,27 @@ popup 宽度 350px 走窄版，被重定向到整页时（宽度 > 400px）走�
   加规则下标起，靠这个区间区分两类规则（`>= OFFSET` 即 timed）。
 - **所有改 DNR 规则的入口都走 `withDnrLock()` 串行队列**（`syncAllRules()` /
   `enforceTimeLimit()` / `resetDailyLimits()`）。alarm、tab 事件、消息处理之间 Chrome
-  **不做串行化**：两个 `syncAllRules` 重叠时会各自先读到「当前规则集」再各自添加，
-  后添加的那个直接抛 `Rule with id 1 does not have a unique ID`；更糟的是「后落地者胜」，
-  可能留下过期规则（专注期结束后 timed 站点仍被封）。加新的规则写入口时，必须也走这把锁。
-  锁里面，`applyDynamicRules()` 真正落盘：**先删、再写，两次调用**。删除时**除了
-  `getDynamicRules()` 报出来的 id，还显式点名删掉「马上要写的那些 id」** —— Chrome 只要
-  发现同 id 的规则还活着就抛 `Rule with id N does not have a unique ID`，而 API 报出来的
-  集合和真正活着的集合**并不总是同一套**。2026-09-28 用户机器就卡在这里：`syncAllRules`
-  每次都报 id 1 冲突（`chrome://extensions` 的错误卡片指向 `applyDynamicRules` 里的写入），
-  把删除和写入**合并成一次 `updateDynamicRules` 反而必炸**（合并式的语义只覆盖
-  「removed ids ⊇ added ids」的情况）。失败的写入会重试 3 次。写之前按 id 去重；
-  报错日志里带「想写的 id / 当时的 id / 规则列表」，`chrome://extensions` 的错误卡片上
-  直接看得到。启动日志用 `chrome.runtime.getManifest().version` 打印版本，能自证构建。
+  **不做串行化**：两个规则写入重叠时会各自先读到「当前规则集」再各自添加，后添加的那个
+  直接抛 `Rule with id 1 does not have a unique ID`；更糟的是「后落地者胜」，可能留下过期
+  规则（专注期结束后 timed 站点仍被封）。加新的规则写入口时，必须也走这把锁。
+- **规则落盘只有一个写手：`syncAllRulesNow()` → `applyDynamicRules()`。** 配额超限
+  （`enforceTimeLimit`）和每日重置（`resetDailyLimitsNow`）**自己不再写规则**：它们只改
+  状态（写用量、清零用量）然后调 `syncAllRulesNow()` 重算整张表。规则集永远是「由状态
+  推导出来的」，不存在第二个写手和它各写一半的可能。
+- **`applyDynamicRules()` 用一次 `updateDynamicRules` 同时删 + 写**，删除列表 =
+  `getDynamicRules()` 报出来的 id ∪ 本次要写的 id。两个原因缺一不可：
+  ① Chrome 只要发现同 id 的规则还活着就抛 `Rule with id N does not have a unique ID`，
+     而 API 报出来的集合和真正活着的集合**并不总是同一套**（2.0.1 就卡在这里，用户机器上
+     每次同步都报 id 1 冲突），所以「马上要写的那些 id」必须显式点名删；
+  ② 删和写放进同一次调用，Chrome 会把它们原子地一起应用 —— 不会出现「删掉了、写失败」
+     导致**规则集被清空、所有站点悄悄放行**的窗口，也不会给别的写手留插队的空隙。
+  2026-09-28 在真实 Chromium 里实测过：`{removeRuleIds: [...], addRules: [...]}` 只要
+  removed ⊇ added 就永远成功（包括删除列表里有根本不存在的 id、重复执行、`addRules` 为空）；
+  只有「删和写分两次调用」才会留下那个窗口。失败会重试 3 次，每次重新读一遍存活集合；
+  写之前按 id 去重。报错日志里带「想写的 id / 当时的 id / 规则列表」，错误卡片上直接看得到。
+  启动日志用 `chrome.runtime.getManifest().version` 打印版本，能自证构建。
+  历史教训：2.0.1 的写法是 `removeRuleIds: stale.map(r => r.id)` —— **只删 API 报出来的 id**，
+  漏掉「活着但没被报出来」的 id，于是每次 add 都撞车。别把「马上要写的 id」从删除列表里删掉。
 - **alarm**：`heartbeat`(1min)、`tracking`(1min)、`dailyReset`(24h，00:01)，
   外加番茄钟的一次性 `pomodoroPhase`（见 8.3）。
 - **番茄钟 / Todo 用另外三个键**（`pomodoro` / `pomodoroSettings` / `todo`），见第 8 节。
@@ -188,16 +202,21 @@ node test/streak-harness.js $env:TEMP\baseline.js        # 应 5/10，失败项�
 真实记账的 DNR 桩：
 
 ```powershell
-node test/pomodoro-harness.js background.js        # 当前版本，应 18/18
+node test/pomodoro-harness.js background.js        # 当前版本，应 20/20
 ```
 
-覆盖 18 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
+覆盖 20 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
 启动重新 arm、并发 tick 只记一次，外加四条回归护栏——P13「`chrome.notifications` 不存在时
 worker 必须照样活着」、P14「`manifest.json` 必须把 `blockpage.html` 列进
 `web_accessible_resources`」、P15「并发的规则同步不能撞 ID」、P16「一波并发同步不能留下
 过期规则集」、P17「写入途中被外部规则插队的冲突要被吞掉并重试，不能只报个错、留下半套规则」、
-P18「`getDynamicRules()` 没报出来、但其实还活着的 id 也必须被清掉，否则 add 永远撞车」。
-它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。
+P18「`getDynamicRules()` 没报出来、但其实还活着的 id 也必须被清掉，否则 add 永远撞车」、
+P19「写不进去的规则不能让已经封着的站点被放行（规则集不许被清空），而且这次失败仍然要给
+popup 回 `{success:true}`，不能变成挂死的消息端口」、P20「配额超限和每日重置都必须由同一个
+写手推导出规则集（超限装规则 + 跳转标签页，重置卸掉配额规则、留下专注期的规则）」。
+它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。P19/P20 的对照做过：
+把写入改回「删、写两次调用」⇒ P19 FAIL；让 `enforceTimeLimit` 空转 ⇒ P20 FAIL；
+把 `items` 挪回 `try` 里 ⇒ P19 连 harness 都炸（正是线上那个 ReferenceError）。
 
 两个 harness 都跑在 Node 的 `vm` 里，**从不真正加载扩展**，所以抓不到「worker 在注册
 任何东西之前就崩了」这一类事故。为此另有一个真浏览器冒烟测试：
@@ -205,11 +224,12 @@ P18「`getDynamicRules()` 没报出来、但其实还活着的 id 也必须被�
 ```powershell
 pip install playwright
 playwright install chromium
-python test/browser-smoke.py            # 当前版本，应 8/8；拦截那一条要能访问 example.com
+python test/browser-smoke.py            # 当前版本，应 11/11；拦截那一条要能访问 example.com
 ```
 
 它真的把扩展装进 Chromium（必须 `headless=False`，headless shell 不支持扩展），依次验证：
-worker 存活、计时器真的倒数、加的任务进了 storage、被拦站点重定向到 `blockpage.html`，
+worker 存活、计时器真的倒数、加的任务进了 storage、被拦站点重定向到 `blockpage.html`、
+被拦页顶栏的 ⏱ 按钮真的能开出计时窗口、一波并发 `syncRules` 之后每个被拦站点只剩一条规则，
 并且**service worker 控制台一条 error 都没有**（DNR 规则冲突就是在这里现形的）。它还会
 打印 `chrome.runtime.getManifest().version` —— 用来确认 reload 是否真的换上了新代码。
 对照：把 `manifest.json` 的 `web_accessible_resources` 删掉再跑，拦截那条必然 FAIL。
@@ -243,6 +263,8 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 | `85d98c9` | 规则写入改成原子更新 + 冲突重试（见第 3 节），补 P17 |
 | `ba8b95c` | 版本升到 `2.0.1`（用来判断 reload 是否生效）+ 失败日志带上 id，冒烟测试盯 worker 控制台 |
 | `7b8a69e` | 删除时显式点名「马上要复用的 id」（第 3 节），版本 `2.0.2`，补 P18 |
+| 本轮 | 规则写入改成**一次原子「删+写」**、配额/每日重置不再自己写规则（第 3 节）；修
+`syncAllRulesNow()` catch 里 `items` 越界引用（8.8-7）；补 P19/P20 与冒烟测试第 7 项 |
 
 ### 已确认未做的事
 
@@ -345,8 +367,8 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 
 ### 8.7 验证
 
-见第 5 节：`node test/pomodoro-harness.js background.js`（应 18/18），以及
-`python test/browser-smoke.py`（应 8/8，真浏览器）。
+见第 5 节：`node test/pomodoro-harness.js background.js`（应 20/20），以及
+`python test/browser-smoke.py`（应 11/11，真浏览器）。
 
 ### 8.8 别踩的坑
 
@@ -370,3 +392,21 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
    `content.js` 里的 `location.href = getURL('blockpage.html')` 都会变成
    `ERR_BLOCKED_BY_CLIENT`，两层防线同时失效，拦截整个不可用。已在 Chromium 153 与 Edge
    上实测（v1.7.2 起就一直是坏的）。harness 的 P14 守着这条。
+6. **`chrome://extensions` 的错误卡片不会因为你点「刷新」而消失。** 2026-09-28 下午用户
+   就是被它坑住了：卡片记的是**当初在哪一行抛的错**，但下面那段源码是按**当前磁盘上的文件**
+   重新渲染的。所以他 reload 到 2.0.2 之后，卡片上还写着 `background.js:110` —— 而 2.0.2 的
+   第 110 行已经是 `seen.add(rule.id)`，只有 **2.0.1** 的第 110 行才是那个 `updateDynamicRules`。
+   判断旧卡片的两招：① 用 `git show <旧 commit>:background.js` 对一下行号对应哪个版本；
+   ② 看日志格式 —— `ba8b95c` 之后的行尾会带「wanted rule ids / live rule ids」，旧卡片没有
+   这一段。确认是旧卡片后，点错误页右上角「全部清除」。**报错不能只看卡片，要看它属于哪个版本。**
+7. **catch 块里不要引用只在 `try` 里声明的 `const`。** `syncAllRulesNow()` 的 catch 曾经引用
+   `items`（`const items = ...` 声明在 try 内部）→ 规则写入一旦失败，catch 自己抛
+   `ReferenceError: items is not defined`，而这个错**会逃出 `syncAllRules()`**：
+   ① 消息处理器 `await` 它时 promise 变 rejected ⇒ `sendResponse` 永远不调用 ⇒ popup 那边
+      `chrome.runtime.sendMessage` 的回调一直不来 ⇒ **界面看起来完全死了（计时点不动、
+      按钮没反应）**；
+   ② `initialize()` 里的 `await syncAllRules()` 抛错 ⇒ 它**之后**的 alarm 创建全被跳过 ⇒
+      `tracking` / `dailyReset` 定时器根本没建起来。
+   用户报的「完全无法计时」= 4 号坑（worker 启动即崩）+ 这个坑叠加。现在 `wantedIds` /
+   `liveIds` / `items` 三个诊断变量都在 `try` 外面声明。P19 守着这条：它不仅断言规则集不被
+   清空，还断言规则写失败时 `syncRules` 仍然要回 `{success:true}`。
