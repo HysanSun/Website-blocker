@@ -67,6 +67,9 @@ popup 宽度 350px 走窄版，被重定向到整页时（宽度 > 400px）走�
   **不做串行化**：两个 `syncAllRules` 重叠时会各自先读到「当前规则集」再各自添加，
   后添加的那个直接抛 `Rule with id 1 does not have a unique ID`；更糟的是「后落地者胜」，
   可能留下过期规则（专注期结束后 timed 站点仍被封）。加新的规则写入口时，必须也走这把锁。
+  锁里面，`syncAllRulesNow()` 的「清空 + 安装」是**一次** `updateDynamicRules` 调用
+  （`applyDynamicRules()`），中间没有窗口；万一还是有别的写者插进来（例如 reload 时
+  正在被销毁的旧 worker 落下最后一笔），会重读旧集合并重试一次，而不是直接报错收工。
 - **alarm**：`heartbeat`(1min)、`tracking`(1min)、`dailyReset`(24h，00:01)，
   外加番茄钟的一次性 `pomodoroPhase`（见 8.3）。
 - **番茄钟 / Todo 用另外三个键**（`pomodoro` / `pomodoroSettings` / `todo`），见第 8 节。
@@ -178,14 +181,15 @@ node test/streak-harness.js $env:TEMP\baseline.js        # 应 5/10，失败项�
 真实记账的 DNR 桩：
 
 ```powershell
-node test/pomodoro-harness.js background.js        # 当前版本，应 16/16
+node test/pomodoro-harness.js background.js        # 当前版本，应 17/17
 ```
 
-覆盖 16 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
+覆盖 17 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
 启动重新 arm、并发 tick 只记一次，外加四条回归护栏——P13「`chrome.notifications` 不存在时
 worker 必须照样活着」、P14「`manifest.json` 必须把 `blockpage.html` 列进
 `web_accessible_resources`」、P15「并发的规则同步不能撞 ID」、P16「一波并发同步不能留下
-过期规则集」。它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。
+过期规则集」、P17「写入途中被外部规则插队的冲突要被吞掉并重试，不能只报个错、留下半套规则」。
+它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。
 
 两个 harness 都跑在 Node 的 `vm` 里，**从不真正加载扩展**，所以抓不到「worker 在注册
 任何东西之前就崩了」这一类事故。为此另有一个真浏览器冒烟测试：
@@ -328,7 +332,7 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 
 ### 8.7 验证
 
-见第 5 节：`node test/pomodoro-harness.js background.js`（应 16/16），以及
+见第 5 节：`node test/pomodoro-harness.js background.js`（应 17/17），以及
 `python test/browser-smoke.py`（应 7/7，真浏览器）。
 
 ### 8.8 别踩的坑

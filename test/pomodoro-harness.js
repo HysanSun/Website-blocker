@@ -80,6 +80,8 @@ function runLifetime(stores, opts) {
   const alarmCalls = [];
   const badge = { text: null, color: null };
   let dnrRules = [];
+  // Simulates a dying worker landing one last rule write during a reload.
+  let sneakRuleId = (opts && 'sneakRuleId' in opts) ? opts.sneakRuleId : null;
   const L = { startup: [], installed: [], alarm: [], message: [], activated: [], updated: [] };
 
   const chrome = {
@@ -107,6 +109,10 @@ function runLifetime(stores, opts) {
       },
       updateDynamicRules: async (o) => {
         await new Promise((r) => setImmediate(r));
+        if (sneakRuleId !== null) {
+          dnrRules = dnrRules.concat([{ id: sneakRuleId, priority: 10, action: {}, condition: {} }]);
+          sneakRuleId = null;
+        }
         const remove = (o && o.removeRuleIds) || [];
         const add = (o && o.addRules) || [];
         const next = remove.length ? dnrRules.filter((r) => remove.indexOf(r.id) === -1) : dnrRules.slice();
@@ -550,6 +556,30 @@ const scenarios = [
       return [ok, 'startOk=' + !!(r.started && r.started.success) +
         ' phase=' + (r.st && r.st.state && r.st.state.phase) +
         ' notifications=' + (r.st && r.st.notifications)];
+    },
+  },
+  {
+    name: 'P17 a foreign rule landing mid-write is absorbed, not reported',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [
+          { val: 'example.com', type: 'block', mode: 'website' },
+          { val: 'example.org', type: 'block', mode: 'website' },
+        ],
+      });
+      // Rule id 1 is dropped in just before the worker's first write, so the
+      // write collides exactly the way it does when a reload races a dying
+      // worker. The writer must re-read and retry instead of giving up.
+      const life = runLifetime(s, { sneakRuleId: 1 });
+      await life.settle();
+      return { life };
+    },
+    expect: (r) => {
+      const reported = r.life.logs.filter((l) => l.indexOf('syncAllRules error') !== -1).length;
+      const ids = r.life.getRules().map((x) => x.id).sort();
+      const ok = reported === 0 && ids.length === 2 && ids[0] === 1 && ids[1] === 2;
+      return [ok, 'reported=' + reported + ' ruleIds=' + JSON.stringify(ids)];
     },
   },
   {

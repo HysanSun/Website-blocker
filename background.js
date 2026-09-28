@@ -85,15 +85,29 @@ function syncAllRules() {
   return withDnrLock(syncAllRulesNow);
 }
 
+// Replace the whole dynamic rule set in a single updateDynamicRules call: the
+// removal and the addition are then one browser-process operation, so there is
+// no window in which another writer could slip a conflicting id in between.
+// A worker that is being torn down during an extension reload can still land a
+// late call, so on the unique-id error read the stale set again and retry once.
+async function applyDynamicRules(rulesToAdd) {
+  for (let attempt = 1; ; attempt++) {
+    const stale = await chrome.declarativeNetRequest.getDynamicRules();
+    try {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: stale.map((r) => r.id),
+        addRules: rulesToAdd
+      });
+      return;
+    } catch (err) {
+      const retryable = /unique ID/i.test(String((err && err.message) || ''));
+      if (!retryable || attempt >= 2) throw err;
+    }
+  }
+}
+
 async function syncAllRulesNow() {
   try {
-    // Remove all existing dynamic rules
-    const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
-    const existingIds = existingRules.map(r => r.id);
-    if (existingIds.length > 0) {
-      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: existingIds });
-    }
-
     // Get current state: blocked items + daily usage + pomodoro (for strictNow)
     const [syncData, localData] = await Promise.all([
       chrome.storage.sync.get([STORAGE_KEYS.BLOCKED_ITEMS]),
@@ -153,9 +167,9 @@ async function syncAllRulesNow() {
       }
     });
 
-    if (rulesToAdd.length > 0) {
-      await chrome.declarativeNetRequest.updateDynamicRules({ addRules: rulesToAdd });
-    }
+    // Clears the previous set and installs the new one in one atomic update,
+    // including when rulesToAdd is empty.
+    await applyDynamicRules(rulesToAdd);
     console.log('[Blocker] Synced', rulesToAdd.length, 'DNR rules');
   } catch (err) {
     console.error('[Blocker] syncAllRules error:', err);
