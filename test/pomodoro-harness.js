@@ -86,6 +86,14 @@ function runLifetime(stores, opts) {
   // state the extension got stuck in: the add kept colliding with an id the
   // removal step had never been told about.
   const hiddenIds = (opts && opts.hiddenRuleIds) || [];
+  // Ids whose add is rejected no matter what the removal asked for. This is the
+  // terminal case: a rule that is enforced but can neither be listed nor
+  // cleared. P19 uses it to check what the worker leaves behind.
+  const atomicFailIds = [];
+  const dnrWrites = [];
+  // The focused tab the tracking tick looks at, and the navigations it makes.
+  const activeTab = (opts && opts.activeTab) || null;
+  const tabUpdates = [];
   const L = { startup: [], installed: [], alarm: [], message: [], activated: [], updated: [] };
 
   const chrome = {
@@ -120,6 +128,12 @@ function runLifetime(stores, opts) {
         }
         const remove = (o && o.removeRuleIds) || [];
         const add = (o && o.addRules) || [];
+        dnrWrites.push({ remove: remove.slice(), add: add.map((r) => r.id) });
+        if (add.some((r) => atomicFailIds.indexOf(r.id) !== -1)) {
+          // Real updateDynamicRules is all or nothing, so a rejected update
+          // leaves the previous rule set exactly as it was.
+          throw new Error('Rule with id ' + add[0].id + ' does not have a unique ID.');
+        }
         const next = remove.length ? dnrRules.filter((r) => remove.indexOf(r.id) === -1) : dnrRules.slice();
         for (const rule of add) {
           if (next.some((r) => r.id === rule.id)) {
@@ -130,8 +144,8 @@ function runLifetime(stores, opts) {
       },
     },
     tabs: {
-      query: async () => [],
-      update: async () => {},
+      query: async () => (activeTab ? [activeTab] : []),
+      update: async (id, o) => { tabUpdates.push({ id: id, url: o && o.url }); },
       onActivated: { addListener: (fn) => L.activated.push(fn) },
       onUpdated: { addListener: (fn) => L.updated.push(fn) },
     },
@@ -199,6 +213,10 @@ function runLifetime(stores, opts) {
     badge,
     alarmCalls,
     getRules: () => dnrRules.slice(),
+    getWrites: () => dnrWrites.slice(),
+    getTabUpdates: () => tabUpdates.slice(),
+    // Turn a ghost id on mid-lifetime: from here on no write can install it.
+    failRuleAdd: (id) => { atomicFailIds.push(id); },
     settle,
     fireStartup: () => L.startup.forEach((fn) => fn()),
     fireInstalled: (reason) => L.installed.forEach((fn) => fn({ reason })),
@@ -683,6 +701,77 @@ const scenarios = [
       // extension page that is not web accessible (ERR_BLOCKED_BY_CLIENT).
       // Blocking is dead without this manifest entry; verified in real Chrome.
       return [exposed, 'web_accessible_resources=' + JSON.stringify(war)];
+    },
+  },
+  {
+    name: 'P19 a rule write that cannot land keeps the previous set on',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [
+          { val: 'example.com', type: 'block', mode: 'website' },
+          { val: 'example.org', type: 'block', mode: 'website' },
+        ],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      const before = life.getRules().map((r) => r.id).sort();
+      // A ghost id that no removal can clear: every add of rule 1 is rejected,
+      // like a live rule getDynamicRules() refuses to report. Removing first
+      // and adding second would drop both sites in the attempt.
+      life.failRuleAdd(1);
+      const reply = await life.sendMessage({ action: 'syncRules' });
+      await drain(400);
+      return { life, before, reply };
+    },
+    expect: (r) => {
+      const reported = r.life.logs.filter((l) => l.indexOf('syncAllRules error') !== -1).length;
+      const after = r.life.getRules().map((x) => x.id).sort();
+      // The failure has to be reported - blocking is out of date and the user
+      // needs to know - but the sites that were already blocked must stay
+      // blocked. An emptied rule set would silently open every one of them.
+      // The popup must still get its reply: a rule write that fails may not
+      // turn into a hung message port (that is what made the timer look dead).
+      const replied = !!(r.reply && r.reply.success === true);
+      const ok = r.before.length === 2 && after.length === 2 && reported >= 1 && replied;
+      return [ok, 'before=' + JSON.stringify(r.before) + ' after=' + JSON.stringify(after) +
+        ' reported=' + reported + ' replied=' + replied];
+    },
+  },
+  {
+    name: 'P20 quota enforcement and the daily reset both follow from the one writer',
+    run: async () => {
+      NOW = T0;
+      const limitMin = 30;
+      const s = seed({
+        rules: [
+          { val: 'example.com', type: 'block', mode: 'website' },
+          { val: 'other.com', type: 'timed', mode: 'website', limitMin: limitMin },
+        ],
+        // initialize() tracks the focused tab once before any alarm fires, so
+        // seed two ticks short of the limit and let the tracking alarm tip it.
+        dailyUsage: { [todayKey()]: { 'other.com': limitMin * 60 * 1000 - 70000 } },
+      });
+      const life = runLifetime(s, { activeTab: { id: 7, url: 'https://other.com/watch' } });
+      await life.settle();
+      const before = life.getRules().map((r) => r.id).sort();
+      life.fireAlarm('tracking');
+      await life.settle();
+      const during = life.getRules().map((r) => r.id).sort();
+      life.fireAlarm('dailyReset');
+      await life.settle();
+      const after = life.getRules().map((r) => r.id).sort();
+      return { life, before, during, after };
+    },
+    expect: (r) => {
+      const errors = r.life.logs.filter((l) => l.indexOf('syncAllRules error') !== -1).length;
+      const redirected = r.life.getTabUpdates().filter((u) => /blockpage\.html/.test(u.url || '')).length;
+      const ok = JSON.stringify(r.before) === '[1]' &&
+        JSON.stringify(r.during) === '[1,2000001]' &&
+        JSON.stringify(r.after) === '[1]' &&
+        redirected >= 1 && errors === 0;
+      return [ok, 'before=' + JSON.stringify(r.before) + ' during=' + JSON.stringify(r.during) +
+        ' after=' + JSON.stringify(r.after) + ' redirects=' + redirected + ' errors=' + errors];
     },
   },
 ];

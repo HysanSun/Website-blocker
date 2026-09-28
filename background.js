@@ -85,15 +85,19 @@ function syncAllRules() {
   return withDnrLock(syncAllRulesNow);
 }
 
-// Write the whole dynamic rule set: clear, then install.
+// Write the whole dynamic rule set in ONE updateDynamicRules call.
 //
 // Chrome rejects an add whose id is still live with "Rule with id N does not
-// have a unique ID", so the removal asks for the ids we are about to add *as
-// well as* everything getDynamicRules() reports. That way the add is safe even
-// if what the API reports and what is actually live disagree.
+// have a unique ID", and the live rule set can disagree with what
+// getDynamicRules() reports - a worker torn down mid-write can leave an id that
+// is still enforced but never listed. The removal therefore asks for the ids we
+// are about to add *as well as* everything getDynamicRules() reports, and does
+// it in the same call as the add.
 //
-// Removal and addition stay two separate calls so the removal has definitely
-// landed before the ids are reused. Callers are serialized by withDnrLock();
+// Doing both in one call matters twice over: Chrome applies remove+add
+// together, so there is no window in which the sites are left unblocked and no
+// gap another writer can slip an add into - the write either fully applies or
+// leaves the previous set in place. Callers are serialized by withDnrLock();
 // the retry covers a writer from outside this worker (a worker being torn down
 // during a reload can land a late write).
 async function applyDynamicRules(rulesToAdd) {
@@ -123,14 +127,15 @@ async function applyDynamicRules(rulesToAdd) {
         removeIds.push(id);
       }
 
-      if (removeIds.length) {
-        await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: removeIds });
-      }
-      if (unique.length) {
-        await chrome.declarativeNetRequest.updateDynamicRules({ addRules: unique });
-      }
+      const update = {};
+      if (removeIds.length) update.removeRuleIds = removeIds;
+      if (unique.length) update.addRules = unique;
+      if (!update.removeRuleIds && !update.addRules) return;
+      await chrome.declarativeNetRequest.updateDynamicRules(update);
       return;
     } catch (err) {
+      // Re-read the live set and try the whole thing again: the collision came
+      // from a rule that appeared between our read and our write.
       const retryable = /unique ID/i.test(String((err && err.message) || ''));
       if (!retryable || attempt >= 3) throw err;
     }
@@ -138,9 +143,14 @@ async function applyDynamicRules(rulesToAdd) {
 }
 
 async function syncAllRulesNow() {
-  // Diagnostics for the catch below: what we asked for vs what was on disk.
+  // Declared outside the try on purpose: the catch block reports all three, and
+  // a const declared inside the try is not in scope there. Getting this wrong
+  // turned every rule-write failure into "ReferenceError: items is not defined"
+  // thrown from the catch itself, which then escaped syncAllRules - the popup
+  // never got its reply and startup stopped before the alarms were created.
   let wantedIds = [];
   let liveIds = [];
+  let items = [];
   try {
     // Get current state: blocked items + daily usage + pomodoro (for strictNow)
     const [syncData, localData] = await Promise.all([
@@ -148,7 +158,7 @@ async function syncAllRulesNow() {
       chrome.storage.local.get([STORAGE_KEYS.DAILY_USAGE, STORAGE_KEYS.POMODORO])
     ]);
 
-    const items = syncData[STORAGE_KEYS.BLOCKED_ITEMS] || [];
+    items = syncData[STORAGE_KEYS.BLOCKED_ITEMS] || [];
     const today = getTodayKey();
     const dailyUsage = localData[STORAGE_KEYS.DAILY_USAGE] || {};
     // A running focus session blocks timed sites outright, whatever today's
@@ -304,43 +314,21 @@ async function trackActiveTab() {
   }
 }
 
-// Same lock: this writes to the same dynamic rule set as syncAllRules.
+// Enforcing a quota is not a second rule writer: syncAllRulesNow already puts a
+// rule in for every timed site that is at or over its limit for the day, so
+// recomputing the whole set is enough here. Keeping exactly one writer is what
+// makes the "clear the ids we are about to reuse" step trustworthy.
 function enforceTimeLimit(domain, limitMin) {
-  return withDnrLock(() => enforceTimeLimitNow(domain, limitMin));
+  return withDnrLock(async () => {
+    await syncAllRulesNow();
+    await redirectActiveTabAway(domain);
+    console.log('[Blocker] Enforced time limit for', domain, '(', limitMin, 'min)');
+  });
 }
 
-async function enforceTimeLimitNow(domain, limitMin) {
-  // 1. Add DNR rule to block this domain
-  const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
-  const timedRuleIds = existingRules
-    .filter(r => r.id >= TIMED_RULE_ID_OFFSET)
-    .map(r => r.id);
-
-  // Find the right ID for this domain
-  const { [STORAGE_KEYS.BLOCKED_ITEMS]: storedItems } = await chrome.storage.sync.get([STORAGE_KEYS.BLOCKED_ITEMS]);
-  const items = storedItems || [];
-  const itemIdx = items.findIndex(item => item.val === domain && item.type === 'timed');
-  const ruleId = (itemIdx >= 0) ? TIMED_RULE_ID_OFFSET + itemIdx : TIMED_RULE_ID_OFFSET + Math.floor(Math.random() * 10000);
-
-  // Remove existing timed rule for this domain if any
-  if (timedRuleIds.includes(ruleId)) {
-    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [ruleId] });
-  }
-
-  // Add block rule
-  await chrome.declarativeNetRequest.updateDynamicRules({
-    addRules: [{
-      id: ruleId,
-      priority: 10,
-      action: { type: 'redirect', redirect: { extensionPath: '/blockpage.html' } },
-      condition: {
-        urlFilter: `*://*.${domain}/*`,
-        resourceTypes: ['main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'xmlhttprequest', 'other']
-      }
-    }]
-  });
-
-  // 2. Redirect active tab if it's on this domain
+// DNR only sees requests that have not been made yet, so a tab that is already
+// sitting on the domain has to be sent to the block page by hand.
+async function redirectActiveTabAway(domain) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (tab && tab.url && tab.url.toLowerCase().includes(domain)) {
@@ -349,8 +337,6 @@ async function enforceTimeLimitNow(domain, limitMin) {
   } catch (e) {
     console.debug('[Blocker] Could not redirect active tab:', e.message);
   }
-
-  console.log('[Blocker] Enforced time limit for', domain, '(', limitMin, 'min)');
 }
 
 function showWarningNotification(domain, remainingMin) {
@@ -382,16 +368,13 @@ async function resetDailyLimitsNow() {
   dailyUsage[today] = {};
   await chrome.storage.local.set({ [STORAGE_KEYS.DAILY_USAGE]: dailyUsage });
 
-  // Remove all timed DNR block rules
-  const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
-  const timedIds = existingRules
-    .filter(r => r.id >= TIMED_RULE_ID_OFFSET)
-    .map(r => r.id);
-  if (timedIds.length > 0) {
-    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: timedIds });
-  }
+  // The rules follow from the usage that was just cleared: syncAllRulesNow
+  // drops every quota rule on its own and keeps whatever a focus session is
+  // pinning, so there is no separate removal that could disagree with the next
+  // sync about what is on.
+  await syncAllRulesNow();
 
-  console.log('[Blocker] Daily reset complete. Removed', timedIds.length, 'timed rules.');
+  console.log('[Blocker] Daily reset complete.');
 }
 
 // Calculate ms until next 00:01

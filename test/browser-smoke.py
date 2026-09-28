@@ -133,8 +133,33 @@ def main():
                     check("block page shows the pomodoro entry",
                           "focus session" in probe.eval_on_selector("#pomodoro-line", "e=>e.textContent").lower())
 
+            # 5. The stopwatch button is the only way into the timer from the
+            # blocked page, so a dead button makes the feature look broken no
+            # matter how healthy the worker is. Close the timer first so the
+            # click has to create the window rather than focus an existing one.
+            page.close()
+            entry = ctx.new_page()
+            entry.goto("chrome-extension://%s/blockpage.html" % ext_id)
+            entry.wait_for_timeout(800)
+            check("blocked page still has the stopwatch button",
+                  entry.eval_on_selector_all("#pomodoro-btn", "els=>els.length") == 1)
+            entry.click("#pomodoro-btn")
+            entry.wait_for_timeout(2500)
+            opened = sw.evaluate("""() => new Promise(res => chrome.windows.getAll({populate: true}, wins => res(
+                (wins || []).some(w => (w.tabs || []).some(t => (t.url || '').indexOf('pomodoro.html') !== -1)))))""")
+            check("the stopwatch button opens the timer window", bool(opened))
+
+            # 6. A burst of overlapping syncs is the shape that used to collide
+            # on rule id 1 and empty the rule set.
+            entry.evaluate("""() => Promise.all(new Array(8).fill(0).map(() => new Promise(
+                res => chrome.runtime.sendMessage({action: 'syncRules'}, res))))""")
+            entry.wait_for_timeout(1500)
+            rules = sw.evaluate("async () => JSON.stringify(await chrome.declarativeNetRequest.getDynamicRules())")
+            check("a burst of rule syncs leaves exactly one rule per blocked site",
+                  rules.count('"id":1') == 1 and "example.com" in rules, rules[:140])
+
             # Give any tab/alarm-driven rule sync a chance to blow up.
-            page.wait_for_timeout(2500)
+            entry.wait_for_timeout(2000)
             check("no service-worker console errors", not sw_errors, str(sw_errors[:3]))
             check("no uncaught page errors", not errors, str(errors))
         finally:
