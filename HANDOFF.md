@@ -24,12 +24,17 @@
 ② 真正的功能性事故是 2.0.1 引入、2.0.2 仍在的 `syncAllRulesNow()` catch 里 `items` 越界
 引用（见 8.8-7）。两处都已修，**版本号这次没有动 —— 要不要升 `2.0.3` 得先问用户**。
 
-本轮（2026-09-28 晚）做「计划用量 + run」（见 8.9，是本轮唯一的功能改动）：任务可以设
+上一轮（2026-09-28 晚）做「计划用量 + run」（见 8.9）：任务可以设
 预计单位数，从任务行 ▶ 弹对话框问「这次要跑几个单位 / 全部」，跑完估计单位后系统提问
 「任务完成了吗」。**专注期从本轮起不能被 `skip`**（只有休息可以），用户明确要求。
 改动只落在 `background.js` / `pomodoro.html` / `pomodoro.js` / `test/pomodoro-harness.js` /
 `test/browser-smoke.py`；`streaks.js`、`settings.html`、`settings.js`、`blockpage.html`
 依然一行未动。**版本号仍未动，要不要升 `2.0.3` 先问用户。**
+
+本轮（2026-09-29）只加了一条用户拍板的纪律：**一次专注只准暂停一次，且最多 2 分钟**
+（`POMODORO_MAX_PAUSE_MS`），超时由 worker 自己把时钟重新走起来；休息期不受限制。
+页面还多了一张可折叠的中文 **Manual** 卡片。改动只在 `background.js` / `pomodoro.html` /
+`pomodoro.js` / `test/pomodoro-harness.js` / `test/browser-smoke.py`。
 
 ## 1. 怎么跑
 
@@ -209,10 +214,10 @@ node test/streak-harness.js $env:TEMP\baseline.js        # 应 5/10，失败项�
 真实记账的 DNR 桩：
 
 ```powershell
-node test/pomodoro-harness.js background.js        # 当前版本，应 25/25
+node test/pomodoro-harness.js background.js        # 当前版本，应 26/26
 ```
 
-覆盖 25 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
+覆盖 26 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
 启动重新 arm、并发 tick 只记一次，外加四条回归护栏——P13「`chrome.notifications` 不存在时
 worker 必须照样活着」、P14「`manifest.json` 必须把 `blockpage.html` 列进
 `web_accessible_resources`」、P15「并发的规则同步不能撞 ID」、P16「一波并发同步不能留下
@@ -221,11 +226,16 @@ P18「`getDynamicRules()` 没报出来、但其实还活着的 id 也必须被�
 P19「写不进去的规则不能让已经封着的站点被放行（规则集不许被清空），而且这次失败仍然要给
 popup 回 `{success:true}`，不能变成挂死的消息端口」、P20「配额超限和每日重置都必须由同一个
 写手推导出规则集（超限装规则 + 跳转标签页，重置卸掉配额规则、留下专注期的规则）」。
-P21–P25（本轮）守着「计划用量与 run」（8.9）：run 会自己走完 N 个单位、在到达估计值时
+P21–P25 守着「计划用量与 run」（8.9）：run 会自己走完 N 个单位、在到达估计值时
 提问；专注不可 skip 而休息可以；run 短于估计值时安静结束；`done` / `continue` / `later`
 三个回答各自的效果；中途 `stop` 让 run 作废且已跑的部分不记账。对照做过：
 ① 让 run 不再自动续下一段 ⇒ P21/P22/P23 FAIL；② 允许 `skip` 掉专注 ⇒ P5/P22 FAIL；
 ③ 去掉「估计值不得低于已记单位」的夹取 ⇒ P24 FAIL。
+
+P5（本轮重写）与 P26 守着「暂停限制」：一次专注只有一次暂停、最多 2 分钟、到点自己恢复、
+恢复后这次专注再也不能暂停；休息可以一直暂停，暂停额度在下一次专注时归还。对照做过：
+① 让暂停永不到期（`pauseEndsAt = 0`）⇒ P5/P26 FAIL；② 允许第二次暂停 ⇒ P5 FAIL；
+③ 暂停期间不重新挂 alarm ⇒ P5 FAIL；④ 相位切换不归还暂停额度 ⇒ P26 FAIL。
 
 它同样保留「会失败的对照」习惯：故意改坏一处必须掉分。P19/P20 的对照做过：
 把写入改回「删、写两次调用」⇒ P19 FAIL；让 `enforceTimeLimit` 空转 ⇒ P20 FAIL；
@@ -237,7 +247,7 @@ P21–P25（本轮）守着「计划用量与 run」（8.9）：run 会自己走
 ```powershell
 pip install playwright
 playwright install chromium
-python test/browser-smoke.py            # 当前版本，应 29/29；拦截那一条要能访问 example.com
+python test/browser-smoke.py            # 当前版本，应 38/38（example.com 不可达时 36/36，那两条 SKIP）
 ```
 
 它真的把扩展装进 Chromium（必须 `headless=False`，headless shell 不支持扩展），依次验证：
@@ -249,6 +259,16 @@ worker 存活、计时器真的倒数、加的任务进了 storage、被拦站�
 真的留下 `run`、估计值落进任务、专注期 `#skip-btn` 是 disabled；以及提问卡片（往
 storage 种一个 `review` 状态再刷新页面）能显示并点名任务、「Not yet」会重开对话框、
 「Yes, it's done」把任务归档进 Done、worker 拒绝 skip 专注、休息可以 skip。
+「暂停」那一组（本轮）：点 Pause 后冻结剩余时间且 `pauseUsed` 落库、暂停提示里能看到
+倒计时、Resume 后按钮变灰且**在鼠标悬停时也看得出是灰的**、再发一次 `pomodoroPause`
+也被 worker 拒绝。
+
+**这套脚本里所有跟规则有关的断言都不依赖网络**：`example.com` 只是用来验证「真的会跳转到
+`blockpage.html`」那条，`saveRules` 本身在任何情况下都要发。曾经是把 `saveRules` 嵌在
+「example.com 可达」的分支里，结果断网时那条 SKIP、规则集一直是空的，后面「一波并发同步
+后只剩一条规则」就必挂（`[]`）——2026-09-29 追了半天才定位到是测试自己的问题，不是 DNR 的。
+对照：把 `ctx.route("**://example.com/**", abort)` 挂上再跑，旧版 26/27（burst 那条 FAIL），
+修好后 36/36。
 `3b` 里还有一条「清空输入框再敲 `3` 不能变成 `13`」：计划对话框的两个数字框如果
 **在 `input` 事件里无条件回写自己**，用户清空准备重输时值会被顶成 1、光标停在末尾，
 接着敲的数字就接在后面。对照：把 `syncPlanDialog()` 改回「无条件回写两个框」⇒
@@ -359,6 +379,13 @@ Skip 规则（它就是给用户看的说明书，内容见 `pomodoro.html` 的 
   风险由两条硬约束兜住：**一次 tick 只推进一个相位**，且**新相位的 `endAt` 从 `now`
   重算**（不继承旧截止时间）。所以关机三小时回来只记 1 段，绝不级联。
 - `skip` / `stop` / `pause` 都不记账；`pause` 把剩余冻进 `pausedRemainingMs` 并清 `endAt`。
+- **暂停是有限的（本轮新增，用户拍板）**：一次**专注**只准暂停一次，且最多
+  `POMODORO_MAX_PAUSE_MS`（2 分钟）。快照存在 `pauseUsed` / `pauseEndsAt` 里，两个字段
+  **每次相位切换都归还**（`pomodoroEnterNextPhase`）。到点由 `pomodoroTick()` 自己恢复，
+  并且**用 `now` 重新起算剩余冻时**（不比 `pauseEndsAt` 早、也不继承旧截止时间），
+  所以睡过整个暂停只会得到一段完整的新时钟，不会凭空完成。暂停期间 `armPomodoroAlarm()`
+  必须把 alarm 挂在 `pauseEndsAt` 上 —— 暂停时没有 `endAt` 可等，漏了它就要等 1 分钟的
+  `tracking` 兜底。**休息期不受限**（暂停多久都行，也不会自己恢复）。
 - **`pomodoroBusy` 是防重入的**：popup 的秒级 tick 和 alarm 可能重叠，缺了它就会重复
   记账、重复发通知（harness 的 P12 守这一条，故意删掉会掉分）。
 - 休眠/关机后一次性 alarm 不保证还在，所以**启动时永远从 `endAt` 重新对齐并重新 arm**，
@@ -397,7 +424,7 @@ Skip 规则（它就是给用户看的说明书，内容见 `pomodoro.html` 的 
 ### 8.7 验证
 
 见第 5 节：`node test/pomodoro-harness.js background.js`（应 25/25），以及
-`python test/browser-smoke.py`（应 29/29，真浏览器）。
+`python test/browser-smoke.py`（应 38/38，真浏览器）。
 
 ### 8.9 计划用量与 run（planned run，本轮新增）
 

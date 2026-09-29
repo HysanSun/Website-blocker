@@ -20,6 +20,7 @@
 | 版本号 | 统一为 `2.0.0` | `manifest.json` |
 | 番茄钟设置放哪 | 内嵌在 `pomodoro.html`，**不动 `settings.*`** | 落实「不改变原有布局」 |
 | 专注期能不能 skip | **不能**：只有休息可以 skip；专注的出口是 Stop（不记账） | `pomodoroSkip()` |
+| 一次专注能暂停多久 | **只能暂停一次，最多 2 分钟**，到点自己恢复；休息不限 | `pomodoroPause()` / `pomodoroTick()` |
 | 任务的预计用时 | 每个任务可设 `plannedUnits`（以番茄为单位）；行首 ▶ 弹框问「本次跑几个单位 / 全部」 | `pomodoro.html` + `setTaskPlan()` |
 | 到达计划时间之后 | 系统提问「任务完成了吗」：完成⇒归档，没完成⇒重估单位继续 | `pomodoroReviewAnswer` |
 
@@ -36,10 +37,13 @@
   从此再也触发不了。P24 守。
 - run 期间要绕开 `autoStartFocus`，否则用户设的「不自动开始下一段」会把 run 停在第 2 段。P21 守。
 - 计划对话框的数字框在 `input` 里回写自己会吃掉用户的击键（`3` 变 `13`）；只重画没在编辑的那个框。
+- 暂停期间页面那个 1 秒循环**不能直接 `return`**：原来 `isPaused` 就返回，结果暂停倒计时不动、
+  worker 自己恢复后页面还停在「已暂停」。真浏览器冒烟测试守这条。
+- 暂停时没有 `endAt` 可等，`armPomodoroAlarm()` 必须改挂 `pauseEndsAt`，否则恢复要等 1 分钟兜底。P5 守。
 
 ## 怎么验
 
 ```powershell
-node test/pomodoro-harness.js background.js   # 应 25/25
+node test/pomodoro-harness.js background.js   # 应 26/26
 node test/streak-harness.js background.js     # 应 10/10
 ```
