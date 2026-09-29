@@ -237,7 +237,7 @@ P21–P25（本轮）守着「计划用量与 run」（8.9）：run 会自己走
 ```powershell
 pip install playwright
 playwright install chromium
-python test/browser-smoke.py            # 当前版本，应 27/27；拦截那一条要能访问 example.com
+python test/browser-smoke.py            # 当前版本，应 29/29；拦截那一条要能访问 example.com
 ```
 
 它真的把扩展装进 Chromium（必须 `headless=False`，headless shell 不支持扩展），依次验证：
@@ -253,6 +253,8 @@ storage 种一个 `review` 状态再刷新页面）能显示并点名任务、�
 **在 `input` 事件里无条件回写自己**，用户清空准备重输时值会被顶成 1、光标停在末尾，
 接着敲的数字就接在后面。对照：把 `syncPlanDialog()` 改回「无条件回写两个框」⇒
 那条 FAIL（`value=13`），并且连带「All」/run/估计值三条一起掉。
+最后一组（`8`）守页面上的 **Manual**：默认折叠，点开后里面必须能读到计时设置与
+Skip 规则（它就是给用户看的说明书，内容见 `pomodoro.html` 的 `#manual-panel`）。
 对照：把 `manifest.json` 的 `web_accessible_resources` 删掉再跑，拦截那条必然 FAIL。
 
 ## 6. 参考（设计依据，非必须重读）
@@ -337,6 +339,8 @@ storage 种一个 `review` 状态再刷新页面）能显示并点名任务、�
 - **`streaks.js`、`settings.html`、`settings.js` 一行未动**。用户要求「不要改变原有界面
   布局」，所以番茄钟设置内嵌在自己的页面里，没往设置页加卡片；`blockpage.html` 只多了
   顶栏一个图标和整页一行状态。
+- 页面最下面还有一个可折叠的 **Manual** 卡片（中文使用说明，默认折叠）：和 Timer
+  settings 同一套「标题即开关 + `▾/▴`」的写法。它纯静态、不读任何状态，加它不影响任何逻辑。
 
 ### 8.2 存储
 
@@ -393,7 +397,7 @@ storage 种一个 `review` 状态再刷新页面）能显示并点名任务、�
 ### 8.7 验证
 
 见第 5 节：`node test/pomodoro-harness.js background.js`（应 25/25），以及
-`python test/browser-smoke.py`（应 27/27，真浏览器）。
+`python test/browser-smoke.py`（应 29/29，真浏览器）。
 
 ### 8.9 计划用量与 run（planned run，本轮新增）
 
