@@ -140,19 +140,25 @@ def main():
             page.wait_for_timeout(800)
 
             # 4. Blocking: a DNR redirect must land on blockpage.html.
+            #
+            # The rule goes in whatever the network is doing - only the redirect
+            # assertion needs example.com to be reachable. Nesting the saveRules
+            # inside that branch made every later rule check depend on the
+            # internet: when example.com was unreachable, nothing was ever
+            # blocked and the burst check below failed on an empty rule set.
             probe = ctx.new_page()
             online = True
             try:
                 probe.goto("https://example.com", wait_until="domcontentloaded", timeout=15000)
             except Exception:
                 online = False
+            page.evaluate("""() => new Promise(res => chrome.runtime.sendMessage(
+                {action:'saveRules',
+                 rules:[{val:'example.com', type:'block', mode:'website'}]}, res))""")
+            page.wait_for_timeout(1500)
             if not online:
                 print("  SKIP  DNR redirect check (example.com is unreachable)")
             else:
-                page.evaluate("""() => new Promise(res => chrome.runtime.sendMessage(
-                    {action:'saveRules',
-                     rules:[{val:'example.com', type:'block', mode:'website'}]}, res))""")
-                page.wait_for_timeout(1500)
                 try:
                     probe.goto("https://example.com", wait_until="domcontentloaded", timeout=15000)
                 except Exception:
@@ -186,8 +192,10 @@ def main():
                 res => chrome.runtime.sendMessage({action: 'syncRules'}, res))))""")
             entry.wait_for_timeout(1500)
             rules = sw.evaluate("async () => JSON.stringify(await chrome.declarativeNetRequest.getDynamicRules())")
+            items_now = sw.evaluate("async () => JSON.stringify((await chrome.storage.sync.get(['blockedItems'])).blockedItems)")
             check("a burst of rule syncs leaves exactly one rule per blocked site",
-                  rules.count('"id":1') == 1 and "example.com" in rules, rules[:140])
+                  rules.count('"id":1') == 1 and "example.com" in rules,
+                  rules[:140] + " | items=" + str(items_now)[:80])
 
             # 7. The review question and the skip rule. Waiting out a real
             # 25 + 5 minute run is not a smoke test, so seed the worker state
@@ -233,14 +241,58 @@ def main():
             check("the archived task shows up under Done",
                   "smoke task" in page2.eval_on_selector("#done-list", "e=>e.textContent"))
 
-            # A focus session refuses to be skipped; a break does not.
-            page2.evaluate("() => new Promise(res => chrome.runtime.sendMessage({action:'pomodoroStart'}, res))")
-            page2.wait_for_timeout(600)
+            # A focus session refuses to be skipped; a break does not. Start it
+            # through the button so the page and the worker agree on the state -
+            # a raw message would leave the page rendering its stale snapshot.
+            page2.click("#primary-btn")
+            page2.wait_for_timeout(900)
+            started = sw.evaluate("async () => (await chrome.storage.local.get(['pomodoro'])).pomodoro.phase")
+            check("the start button puts the worker in focus", started == "focus", "phase=" + str(started))
             skipped = page2.evaluate("""() => new Promise(res => chrome.runtime.sendMessage(
                 {action:'pomodoroSkip'}, r => res(r && r.state ? r.state.phase : null)))""")
             check("the worker refuses to skip a focus session", skipped == "focus", "phase=" + str(skipped))
             check("the skip button is disabled while focusing",
                   page2.eval_on_selector("#skip-btn", "e=>e.disabled") is True)
+
+            # The one pause a focus session gets: the clock freezes, it expires
+            # on its own, and the button is spent for the rest of the session.
+            page2.click("#primary-btn")
+            page2.wait_for_timeout(900)
+            st = page2.evaluate("""() => new Promise(res => chrome.runtime.sendMessage(
+                {action:'pomodoroGetState'}, r => res({paused: r.state.pausedRemainingMs,
+                    used: r.state.pauseUsed, leftMs: r.state.pauseEndsAt - Date.now(),
+                    maxMs: r.pauseMaxMs})))""")
+            check("pausing a focus freezes the clock and caps the pause",
+                  0 < st["leftMs"] <= st["maxMs"] and st["used"] is True, str(st))
+            check("the pause note counts the pause down",
+                  "restarts itself in" in page2.eval_on_selector("#focus-note", "e=>e.textContent"),
+                  page2.eval_on_selector("#focus-note", "e=>e.textContent"))
+            check("the button offers Resume while paused",
+                  page2.eval_on_selector("#primary-btn", "e=>e.textContent").strip() == "Resume")
+            page2.click("#primary-btn")
+            page2.wait_for_timeout(900)
+            after_resume = page2.evaluate("""() => new Promise(res => chrome.runtime.sendMessage(
+                {action:'pomodoroGetState'}, r => res({paused: r.state.pausedRemainingMs,
+                    used: r.state.pauseUsed})))""")
+            check("resuming clears the freeze but keeps the pause spent",
+                  after_resume["paused"] is None and after_resume["used"] is True, str(after_resume))
+            check("the pause button is greyed out for the rest of the session",
+                  page2.eval_on_selector("#primary-btn", "e=>e.disabled") is True)
+            check("the greyed-out button explains why",
+                  "already used" in page2.eval_on_selector("#primary-btn", "e=>e.title"))
+            # The cursor is still on the button after the click, which is exactly
+            # when a hover rule would hide the disabled state.
+            page2.hover("#primary-btn")
+            page2.wait_for_timeout(200)
+            spent_opacity = page2.evaluate(
+                "() => parseFloat(getComputedStyle(document.getElementById('primary-btn')).opacity)")
+            check("the greyed-out button looks it, even under the cursor",
+                  spent_opacity < 0.5, "opacity=%s" % spent_opacity)
+            # ... and the worker refuses a pause sent anyway.
+            second = page2.evaluate("""() => new Promise(res => chrome.runtime.sendMessage(
+                {action:'pomodoroPause'}, r => res(r.state.pausedRemainingMs)))""")
+            check("a second pause on the same focus is refused", second is None, str(second))
+
             page2.evaluate("() => new Promise(res => chrome.runtime.sendMessage({action:'pomodoroStop'}, res))")
             page2.wait_for_timeout(400)
             page2.evaluate("""() => new Promise(res => chrome.storage.local.set({pomodoro: {
