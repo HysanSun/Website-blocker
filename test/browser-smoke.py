@@ -259,6 +259,17 @@ def main():
                   after_skip in ("idle", "focus"), "phase=" + str(after_skip))
             page2.evaluate("() => new Promise(res => chrome.runtime.sendMessage({action:'pomodoroStop'}, res))")
 
+            # 8. The manual is part of the page and has to open.
+            check("the manual starts collapsed",
+                  page2.eval_on_selector("#manual-panel", "e=>e.hidden") is True)
+            page2.click("#manual-toggle")
+            page2.wait_for_timeout(300)
+            manual = page2.eval_on_selector("#manual-panel", "e=>e.textContent")
+            check("the manual opens and explains the timer",
+                  page2.eval_on_selector("#manual-panel", "e=>e.hidden") is False
+                  and "Timer settings" in manual and "Skip" in manual,
+                  "%d chars" % len(manual))
+
             # Give any tab/alarm-driven rule sync a chance to blow up.
             entry.wait_for_timeout(2000)
             check("no service-worker console errors", not sw_errors, str(sw_errors[:3]))

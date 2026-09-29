@@ -28,6 +28,9 @@
     var settingsPanel = el('settings-panel');
     var settingsCaret = el('settings-caret');
     var saveSettingsBtn = el('save-settings');
+    var manualToggle = el('manual-toggle');
+    var manualPanel = el('manual-panel');
+    var manualCaret = el('manual-caret');
     var runLine = el('run-line');
     var focusNote = el('focus-note');
     var reviewCard = el('review-card');
@@ -481,6 +484,11 @@
     settingsToggle.addEventListener('click', function () {
         settingsPanel.hidden = !settingsPanel.hidden;
         settingsCaret.textContent = settingsPanel.hidden ? '\u25BE' : '\u25B4';
+    });
+
+    manualToggle.addEventListener('click', function () {
+        manualPanel.hidden = !manualPanel.hidden;
+        manualCaret.textContent = manualPanel.hidden ? '\u25BE' : '\u25B4';
     });
 
     saveSettingsBtn.addEventListener('click', function () {

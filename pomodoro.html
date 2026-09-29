@@ -236,6 +236,31 @@
         }
         .hint { font-size: 0.68rem; color: var(--text-muted); margin: 8px 0 0; }
 
+        /* --- Manual --- */
+        #settings-toggle, #manual-toggle { cursor: pointer; }
+        #manual-panel {
+            font-size: 0.76rem;
+            line-height: 1.55;
+            color: var(--primary-color);
+        }
+        #manual-panel h3 {
+            font-size: 0.76rem;
+            margin: 14px 0 5px;
+            color: var(--primary-color);
+        }
+        #manual-panel h3:first-child { margin-top: 0; }
+        #manual-panel p { margin: 0 0 6px; }
+        #manual-panel ul { margin: 0 0 6px; padding-left: 18px; }
+        #manual-panel li { margin-bottom: 4px; }
+        #manual-panel b { color: var(--primary-color); }
+        #manual-panel code {
+            background: var(--bg-page);
+            border-radius: 4px;
+            padding: 0 4px;
+            font-family: Consolas, Menlo, monospace;
+            font-size: 0.72rem;
+        }
+
         /* --- Planned runs --- */
         #run-line {
             text-align: center;
@@ -386,6 +411,64 @@
             </div>
             <button id="save-settings">Save settings</button>
             <p class="hint">Changes apply from the next session. A running timer keeps the deadline it started with.</p>
+        </div>
+    </div>
+
+    <!-- Manual -->
+    <div class="card">
+        <h2 id="manual-toggle">Manual <span id="manual-caret">&#9662;</span></h2>
+        <div id="manual-panel" hidden>
+            <h3>三十秒上手</h3>
+            <ul>
+                <li>在 <b>Tasks</b> 里输入任务，按 <b>Add</b>。</li>
+                <li>点任务行首的 <b>&#9654;</b>（或行尾的 <code>0/3 &#127813;</code>），弹出计划框。</li>
+                <li>填「这个任务预计几个单位」，点 <b>All</b> 或直接 <b>Start focus</b>。</li>
+                <li>跑满计划后系统提问：做完了按 <b>Yes, it's done</b> 归档；没做完按 <b>Not yet</b>
+                    重新估时间。</li>
+            </ul>
+
+            <h3>「单位」是什么</h3>
+            <p>1 单位 = 1 段专注 + 紧跟它的那段休息，时长由上面的 <b>Timer settings</b> 决定
+            （默认 25 + 5 分钟）。任务行尾的 <code>2/5</code> 读作「已记 2 单位 / 计划 5 单位」。</p>
+
+            <h3>计划框里的两个数字</h3>
+            <ul>
+                <li><b>Planned units (estimate)</b>：这个任务一共值几个单位，随时可改，但不会被
+                改到低于已经做完的那部分（否则「到达计划」这个提问就再也不会出现了）。</li>
+                <li><b>Units this session</b>：这次先做几个，上限是「还差几个到计划」；
+                <b>All</b> 一下填满。</li>
+            </ul>
+
+            <h3>计时中能做什么</h3>
+            <ul>
+                <li><b>Stop</b>：放弃这一段，<b>不记账</b>，整次 run 一起作废（没做完的单位要重来）。</li>
+                <li><b>Skip</b>：只有<b>休息</b>能跳。专注期它是灰的 —— 一段专注必须走完，
+                    不想做就用 Stop 认账。</li>
+                <li><b>Pause / Resume</b>：暂停不解除拦截（专注期照样封站），也不推进计时。</li>
+                <li>run 期间休息一结束会<b>自动</b>进下一段专注，即使关着「自动开始下一段」——
+                    这是「一直做到做完」的意思。</li>
+            </ul>
+
+            <h3>跟拦截的关系</h3>
+            <ul>
+                <li>专注期（暂停也算）把所有 <b>timed</b> 站点按 0 额度封死；<b>block</b> 站点
+                    照旧一直封。</li>
+                <li>不想要这条就取消 <b>Block timed sites during focus</b>。</li>
+                <li>专注期被拦下来的标签页<b>不会自己跳回来</b>，刷新一下即可。</li>
+            </ul>
+
+            <h3>数据与统计</h3>
+            <ul>
+                <li>计时状态和任务存在扩展本地（关浏览器不丢），设置跟着账号同步。</li>
+                <li>「今日 N 段 / M 分钟」每天零点清零；循环进度和任务不受影响，未完成任务跨天保留。</li>
+                <li>做完的任务进 <b>Done</b> 区，永不自动删除，只有 <b>Clear completed</b> 才删。</li>
+                <li>扩展图标上的角标：专注期橙色显示剩余分钟，休息期绿色。</li>
+            </ul>
+
+            <h3>关机 / 休眠回来之后</h3>
+            <p>到期只看时间戳：回来时若已过截止时间，这段就算完成，<b>但只补记一段</b>（新的一段
+            从你回来的时刻重新起算），不会把几小时算成几十段。睡过头超过 2 分钟的那次转换不发
+            系统通知，但照记账。</p>
         </div>
     </div>
 
