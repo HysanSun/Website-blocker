@@ -53,6 +53,7 @@
     var settings = null;
     var tasks = [];
     var tickInFlight = false;
+    var pauseMaxMs = 2 * 60 * 1000;
     var editingId = null;
     var planTaskId = null;
 
@@ -138,6 +139,13 @@
         taskLine.textContent = task ? task.text : (running ? 'No task selected' : '');
 
         primaryBtn.textContent = !running ? 'Start' : (isPaused(state) ? 'Resume' : 'Pause');
+        // One pause per focus session, and the worker refuses a second one; the
+        // greyed-out button is how the user finds that out before clicking.
+        var pauseSpent = state.phase === 'focus' && !isPaused(state) && !!state.pauseUsed;
+        primaryBtn.disabled = pauseSpent;
+        primaryBtn.title = pauseSpent
+            ? 'This focus session has already used its one pause.'
+            : '';
         stopBtn.disabled = !running;
         // Only breaks can be skipped. A focus session has to be seen through;
         // Stop is the honest way out of one (it records nothing).
@@ -145,7 +153,16 @@
         skipBtn.title = state.phase === 'focus'
             ? 'A focus session cannot be skipped. Use Stop to give it up.'
             : 'Skip the rest of this break';
-        focusNote.hidden = state.phase !== 'focus';
+        if (state.phase === 'focus' && isPaused(state) && state.pauseEndsAt) {
+            // The pause is on its own clock: say so, with the time left.
+            focusNote.textContent = 'Paused \u2014 the clock restarts itself in ' +
+                clockText(state.pauseEndsAt - Date.now()) + '. One pause per session, ' +
+                Math.round(pauseMaxMs / 60000) + ' minutes at most.';
+            focusNote.hidden = false;
+        } else {
+            focusNote.textContent = 'Focus cannot be skipped \u2014 Stop gives the run up.';
+            focusNote.hidden = state.phase !== 'focus';
+        }
 
         var run = state.run;
         if (run && run.taskId) {
@@ -322,6 +339,7 @@
         if (res && res.success && res.state) {
             state = res.state;
             settings = res.settings;
+            if (res.pauseMaxMs) pauseMaxMs = res.pauseMaxMs;
             renderTimer();
             renderReview();
             // Notifications are optional: Chrome only hands over the API once
@@ -512,7 +530,23 @@
     // Local countdown. When the deadline passes, ask the worker to do the
     // transition rather than waiting for its next alarm.
     setInterval(function () {
-        if (!state || state.phase === 'idle' || isPaused(state)) return;
+        if (!state || state.phase === 'idle') return;
+        if (isPaused(state)) {
+            // A limited pause ends on its own, and the worker owns that
+            // transition (its own alarm restarts the clock even with this page
+            // closed). All this page has to do is keep the countdown moving and
+            // adopt whatever the worker decided.
+            if (state.pauseEndsAt && Date.now() >= state.pauseEndsAt && !tickInFlight) {
+                tickInFlight = true;
+                send({ action: 'pomodoroTick' }).then(function (res) {
+                    tickInFlight = false;
+                    applyStatus(res);
+                });
+                return;
+            }
+            renderTimer();
+            return;
+        }
         if (remainingOf(state) > 0) { renderTimer(); return; }
         if (tickInFlight) return;
         tickInFlight = true;

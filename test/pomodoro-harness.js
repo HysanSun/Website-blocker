@@ -357,7 +357,7 @@ const scenarios = [
     },
   },
   {
-    name: 'P5 pause freezes, resume recomputes, focus refuses to be skipped',
+    name: 'P5 a focus pause is one pause, capped at two minutes, and it expires itself',
     run: async () => {
       NOW = T0;
       const s = seed({ pomodoro: { phase: 'focus', endAt: T0 + 25 * MIN, startedAt: T0 } });
@@ -365,30 +365,52 @@ const scenarios = [
       await life.settle();
       await life.sendMessage({ action: 'pomodoroPause' });
       const paused = snap(s);
-      advance(10 * MIN);
+      const armedAtPause = life.alarmCalls
+        .filter((c) => c.name === 'pomodoroPhase' && !c.clear && c.info && c.info.when)
+        .map((c) => c.info.when).pop();
+      // A second pause must neither start a new allowance nor extend this one.
+      advance(1 * MIN);
+      await life.sendMessage({ action: 'pomodoroPause' });
+      const secondPause = snap(s);
       life.fireAlarm('tracking');
       await drain();
       const stillPaused = snap(s);
-      await life.sendMessage({ action: 'pomodoroResume' });
-      const resumed = snap(s);
+      // The allowance runs out and the clock turns itself back on, from `now`.
+      advance(9 * MIN);
+      life.fireAlarm('tracking');
+      await drain();
+      const autoResumed = snap(s);
+      // The one pause is spent for the rest of this focus session.
+      await life.sendMessage({ action: 'pomodoroPause' });
+      const pauseAfterResume = snap(s);
       await life.sendMessage({ action: 'pomodoroSkip' });
       const skipped = snap(s);
       await life.sendMessage({ action: 'pomodoroStop' });
       const stopped = snap(s);
-      return { paused, stillPaused, resumed, skipped, stopped };
+      return { paused, secondPause, stillPaused, autoResumed, pauseAfterResume, skipped, stopped,
+        armedAtPause };
     },
     expect: (r) => {
-      // Skipping a focus is refused outright: same phase, same deadline, no
-      // credit. Stopping is the honest way out and records nothing.
+      // Skipping a focus is still refused outright, and Stop is still the honest
+      // way out. A break's pause is unlimited (P26), a focus gets exactly one.
       const ok = r.paused.pausedRemainingMs === 25 * MIN && r.paused.endAt === 0 &&
+        r.paused.pauseUsed === true && r.paused.pauseEndsAt === T0 + 2 * MIN &&
+        r.armedAtPause === T0 + 2 * MIN &&
+        r.secondPause.pausedRemainingMs === 25 * MIN && r.secondPause.pauseEndsAt === T0 + 2 * MIN &&
         r.stillPaused.phase === 'focus' && r.stillPaused.pausedRemainingMs === 25 * MIN &&
-        r.resumed.endAt === T0 + 10 * MIN + 25 * MIN && r.resumed.pausedRemainingMs === null &&
-        r.skipped.phase === 'focus' && r.skipped.endAt === r.resumed.endAt &&
+        r.autoResumed.pausedRemainingMs === null && r.autoResumed.pauseEndsAt === 0 &&
+        r.autoResumed.pauseUsed === true && r.autoResumed.endAt === T0 + 10 * MIN + 25 * MIN &&
+        r.pauseAfterResume.pausedRemainingMs === null &&
+        r.pauseAfterResume.endAt === r.autoResumed.endAt &&
+        r.skipped.phase === 'focus' && r.skipped.endAt === r.autoResumed.endAt &&
         r.skipped.focusToday === 0 && r.skipped.cycleDone === 0 &&
         r.stopped.phase === 'idle';
-      return [ok, 'paused=' + r.paused.pausedRemainingMs + ' stillPaused=' + r.stillPaused.phase +
-        ' resumedIn=' + ((r.resumed.endAt - (T0 + 10 * MIN)) / MIN) + 'min skipRefused=' + r.skipped.phase +
-        '/' + ((r.skipped.endAt - (T0 + 10 * MIN)) / MIN) + 'min today' + r.skipped.focusToday +
+      return [ok, 'paused=' + r.paused.pausedRemainingMs + '/' + (r.paused.pauseEndsAt - T0) / MIN +
+        'min armedAt=' + (r.armedAtPause ? (r.armedAtPause - T0) / MIN + 'min' : 'none') +
+        ' 2ndPauseKeeps=' + (r.secondPause.pauseEndsAt === T0 + 2 * MIN) +
+        ' autoResumeIn=' + ((r.autoResumed.endAt || 0) - (T0 + 10 * MIN)) / MIN + 'min' +
+        ' pauseAgainRefused=' + (r.pauseAfterResume.pausedRemainingMs === null) +
+        ' skipRefused=' + r.skipped.phase + ' today' + r.skipped.focusToday +
         ' stop=' + r.stopped.phase];
     },
   },
@@ -941,6 +963,47 @@ const scenarios = [
       return [ok, 'phase=' + r.p.phase + ' run=' + JSON.stringify(r.p.run) +
         ' review=' + JSON.stringify(r.p.review) + ' today=' + r.p.focusToday +
         ' pomodoros=' + r.task.pomodoros + '/' + r.task.plannedUnits];
+    },
+  },
+  {
+    name: 'P26 breaks pause freely, and the next focus gets its one pause back',
+    run: async () => {
+      NOW = T0;
+      // pauseUsed is set as well: a leftover flag from the focus that just ended
+      // must not leak into the break, and must not survive into the next focus.
+      const s = seed({
+        pomodoro: { phase: 'shortBreak', endAt: T0 + 5 * MIN, startedAt: T0, pauseUsed: true },
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      await life.sendMessage({ action: 'pomodoroPause' });
+      const paused = snap(s);
+      advance(30 * MIN);
+      life.fireAlarm('tracking');
+      await drain();
+      const stillPaused = snap(s);
+      await life.sendMessage({ action: 'pomodoroResume' });
+      const resumed = snap(s);
+      // Skip the rest of the break: the phase changes, which hands the pause back.
+      await life.sendMessage({ action: 'pomodoroSkip' });
+      const afterBreak = snap(s);
+      await life.sendMessage({ action: 'pomodoroStart' });
+      await life.sendMessage({ action: 'pomodoroPause' });
+      const nextFocus = snap(s);
+      return { paused, stillPaused, resumed, afterBreak, nextFocus };
+    },
+    expect: (r) => {
+      const ok = r.paused.pausedRemainingMs === 5 * MIN && r.paused.pauseEndsAt === 0 &&
+        r.stillPaused.phase === 'shortBreak' && r.stillPaused.pausedRemainingMs === 5 * MIN &&
+        r.resumed.endAt === T0 + 30 * MIN + 5 * MIN &&
+        r.afterBreak.phase === 'idle' && r.afterBreak.pauseUsed === false &&
+        r.nextFocus.phase === 'focus' && r.nextFocus.pauseUsed === true &&
+        r.nextFocus.pauseEndsAt === T0 + 30 * MIN + 2 * MIN;
+      return [ok, 'breakPause=' + (r.paused.pausedRemainingMs / MIN) + 'min noSelfResume=' +
+        (r.paused.pauseEndsAt === 0 && r.stillPaused.pausedRemainingMs === 5 * MIN) +
+        ' resumedEndIn=' + ((r.resumed.endAt - (T0 + 30 * MIN)) / MIN) + 'min afterBreak=' +
+        r.afterBreak.phase + '/pauseUsed' + r.afterBreak.pauseUsed + ' nextFocusPause=' +
+        r.nextFocus.pauseUsed + '/' + ((r.nextFocus.pauseEndsAt || 0) - (T0 + 30 * MIN)) / MIN + 'min'];
     },
   },
 ];

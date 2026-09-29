@@ -37,6 +37,10 @@ const POMODORO_RULE_ID_OFFSET = 1500000;
 // is still worth showing - it must never affect crediting.
 const POMODORO_NOTIFY_MAX_LATE_MS = 2 * 60 * 1000;
 const POMODORO_NOTIFY_ID = 'pomodoro-phase';
+// A focus session may be paused exactly once, and for no longer than this: the
+// clock turns itself back on. Breaks are not limited - nothing is being
+// enforced while you are resting.
+const POMODORO_MAX_PAUSE_MS = 2 * 60 * 1000;
 const TASK_TEXT_MAX = 200;
 
 // ============================================================
@@ -517,6 +521,11 @@ const POMODORO_STATE_DEFAULTS = {
   focusMsToday: 0,
   taskId: null,
   strictNow: false,
+  // The one pause a focus session gets: pauseUsed is spent on the first pause
+  // and handed back at the next phase change, pauseEndsAt is when the frozen
+  // clock starts itself again (0 = not a limited pause).
+  pauseUsed: false,
+  pauseEndsAt: 0,
   // A run is the multi-unit commitment the user starts from a task row:
   // { taskId, units, focusDone }. It survives worker recycling because it is
   // part of the state, and it is what makes the timer keep going on its own.
@@ -598,7 +607,14 @@ async function armPomodoroAlarm() {
   const state = await getPomodoroState();
   await chrome.alarms.clear(POMODORO_ALARM);
   const paused = state.pausedRemainingMs !== null && state.pausedRemainingMs !== undefined;
-  if (state.phase !== 'idle' && !paused && state.endAt > 0) {
+  if (paused) {
+    // A limited pause has no session deadline to wait for, but the worker still
+    // has to wake up when the allowance runs out - that is what restarts the
+    // clock. Without this the resume would wait for the 1-minute tracking tick.
+    if (state.pauseEndsAt > 0) chrome.alarms.create(POMODORO_ALARM, { when: state.pauseEndsAt });
+    return;
+  }
+  if (state.phase !== 'idle' && state.endAt > 0) {
     chrome.alarms.create(POMODORO_ALARM, { when: state.endAt });
   }
 }
@@ -698,6 +714,9 @@ async function pomodoroEnterNextPhase(state, settings, now, credit) {
   }
 
   state.pausedRemainingMs = null;
+  // A new phase hands the pause back: the next focus gets its own one.
+  state.pauseUsed = false;
+  state.pauseEndsAt = 0;
 
   if (next === 'idle') {
     state.phase = 'idle';
@@ -718,7 +737,19 @@ async function pomodoroTick() {
     const state = await getPomodoroState();
     const now = Date.now();
     const paused = state.pausedRemainingMs !== null && state.pausedRemainingMs !== undefined;
-    if (state.phase === 'idle' || paused) return { changed: false };
+    if (state.phase === 'idle') return { changed: false };
+    if (paused) {
+      // The pause has run out: the clock starts itself again with the frozen
+      // remainder, from `now` and never from the deadline it was frozen at -
+      // a machine that slept through the pause must not come back to a session
+      // that finished while nobody was working.
+      if (!state.pauseEndsAt || now < state.pauseEndsAt) return { changed: false };
+      state.endAt = now + state.pausedRemainingMs;
+      state.pausedRemainingMs = null;
+      state.pauseEndsAt = 0;
+      await writePomodoroState(state);
+      return { changed: true };
+    }
     if (!state.endAt || now < state.endAt) return { changed: false };
 
     const settings = await getPomodoroSettings();
@@ -760,6 +791,9 @@ async function pomodoroStatus() {
     state: state,
     settings: settings,
     remainingMs: pomodoroRemainingMs(state),
+    // The page shows how long the pause may last, so the limit is sent with the
+    // state instead of being written out a second time in the UI.
+    pauseMaxMs: POMODORO_MAX_PAUSE_MS,
     notifications: notificationsAvailable()
   };
 }
@@ -790,6 +824,8 @@ async function pomodoroStart(taskId, units, planUnits) {
   state.startedAt = now;
   state.endAt = now + settings.focusMin * 60 * 1000;
   state.pausedRemainingMs = null;
+  state.pauseUsed = false;
+  state.pauseEndsAt = 0;
   return writePomodoroState(state, settings);
 }
 
@@ -797,8 +833,16 @@ async function pomodoroPause() {
   const state = await getPomodoroState();
   const paused = state.pausedRemainingMs !== null && state.pausedRemainingMs !== undefined;
   if (state.phase === 'idle' || paused) return writePomodoroState(state);
-  state.pausedRemainingMs = Math.max(0, state.endAt - Date.now());
+  // One pause per focus session, and it expires on its own (see pomodoroTick).
+  // Breaks are left unlimited: the promise of this tool is about the work.
+  if (state.phase === 'focus' && state.pauseUsed) return writePomodoroState(state);
+  const now = Date.now();
+  state.pausedRemainingMs = Math.max(0, state.endAt - now);
   state.endAt = 0;
+  if (state.phase === 'focus') {
+    state.pauseUsed = true;
+    state.pauseEndsAt = now + POMODORO_MAX_PAUSE_MS;
+  }
   return writePomodoroState(state);
 }
 
@@ -808,6 +852,7 @@ async function pomodoroResume() {
   if (state.phase === 'idle' || !paused) return writePomodoroState(state);
   state.endAt = Date.now() + state.pausedRemainingMs;
   state.pausedRemainingMs = null;
+  state.pauseEndsAt = 0;
   return writePomodoroState(state);
 }
 
@@ -833,6 +878,7 @@ async function pomodoroStop() {
   state.endAt = 0;
   state.startedAt = 0;
   state.pausedRemainingMs = null;
+  state.pauseEndsAt = 0;
   // Giving up on the session gives up on its run as well: the units it had left
   // were never spent and nothing was credited for the part that did run.
   state.run = null;

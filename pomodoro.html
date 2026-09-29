@@ -100,7 +100,12 @@
             color: #fff;
         }
         .btn-row button.primary:hover { opacity: 0.9; color: #fff; }
-        .btn-row button:disabled { opacity: 0.4; cursor: default; border-color: #ddd; color: var(--primary-color); }
+        /* button.primary:hover out-specifies a bare :disabled, so a button that
+           was just clicked (the cursor is still on it) would look fully live.
+           These two selectors keep a spent button looking spent. */
+        .btn-row button:disabled,
+        .btn-row button.primary:disabled,
+        .btn-row button:disabled:hover { opacity: 0.4; cursor: default; border-color: #ddd; color: var(--primary-color); }
         #today-line {
             text-align: center;
             font-size: 0.7rem;
@@ -444,7 +449,10 @@
                 <li><b>Stop</b>：放弃这一段，<b>不记账</b>，整次 run 一起作废（没做完的单位要重来）。</li>
                 <li><b>Skip</b>：只有<b>休息</b>能跳。专注期它是灰的 —— 一段专注必须走完，
                     不想做就用 Stop 认账。</li>
-                <li><b>Pause / Resume</b>：暂停不解除拦截（专注期照样封站），也不推进计时。</li>
+                <li><b>Pause / Resume</b>：暂停不解除拦截（专注期照样封站），也不推进计时。
+                    <b>一次专注只能暂停一次，而且最多 2 分钟</b> —— 到点计时自己重新走起来，
+                    暂停中会显示还剩多久；之后 Pause 按钮变灰。休息期不受这条限制。
+                    （时长写在 <code>background.js</code> 的 <code>POMODORO_MAX_PAUSE_MS</code>。）</li>
                 <li>run 期间休息一结束会<b>自动</b>进下一段专注，即使关着「自动开始下一段」——
                     这是「一直做到做完」的意思。</li>
             </ul>
