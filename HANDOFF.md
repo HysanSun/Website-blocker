@@ -80,6 +80,16 @@ popup 宽度 350px 走窄版，被重定向到整页时（宽度 > 400px）走�
   日期键来自 `new Date().toLocaleDateString('zh-CN')`。
 - **DNR 规则 ID 分配**：普通拦截从 `1` 起；timed 从 `TIMED_RULE_ID_OFFSET`（2000000）
   加规则下标起，靠这个区间区分两类规则（`>= OFFSET` 即 timed）。
+- **例外（`!` 开头）走独立 ID 段 `ALLOW_RULE_ID_OFFSET = 1000000`**：`syncAllRulesNow()` 把 `val` 以
+  `!` 开头的项变成 `priority: 100` 的 `allow` 规则（重定向规则是 `priority: 10`，最高优先级命中者胜），
+  覆盖 `!` 后面那个主机及其所有子域。**设置页不用改** —— 就在同一个输入框里填 `!pan.baidu.com`。
+  `trackActiveTab()` 里被例外的 host 既不计用量也不强制；专注期的封禁同样让位（见 8.4）。
+- **网站规则的 urlFilter 是 `||host^`，不是 `*://*.host/*` ⚠️**：2026-10-02 在真实 Chromium 里用
+  `declarativeNetRequestFeedback` + `testMatchOutcome` 逐条量过，两个差别都很要命：
+  ① `*://*.host/*` **不匹配裸域名** —— 规则里写 `baidu.com` 时 DNR 那层对 `baidu.com` 自己不生效，
+  一直是靠 `content.js` 第二层兜着才没人发现；② 前导 `*` 不看主机边界，`host.evil.com` 也会被卷进来。
+  `||host^` = 裸域名 + 全部子域，且止步于主机边界。`content.js` 的 `hostMatches()` 与它同语义，
+  **三处（DNR / content.js / trackActiveTab）必须一致**；查旧代码时别再照抄 `*://*.host/*`。
 - **所有改 DNR 规则的入口都走 `withDnrLock()` 串行队列**（`syncAllRules()` /
   `enforceTimeLimit()` / `resetDailyLimits()`）。alarm、tab 事件、消息处理之间 Chrome
   **不做串行化**：两个规则写入重叠时会各自先读到「当前规则集」再各自添加，后添加的那个
@@ -214,10 +224,10 @@ node test/streak-harness.js $env:TEMP\baseline.js        # 应 5/10，失败项�
 真实记账的 DNR 桩：
 
 ```powershell
-node test/pomodoro-harness.js background.js        # 当前版本，应 26/26
+node test/pomodoro-harness.js background.js        # 当前版本，应 28/28
 ```
 
-覆盖 26 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
+覆盖 28 个场景：正常到期/长休/挂钟语义不级联、worker 回收、暂停与跳过、`disable→enable` 作废该段、跨天清零、专注期封死 timed 且退出后按真实用量恢复、任务缺失、陈旧转换不发通知、
 启动重新 arm、并发 tick 只记一次，外加四条回归护栏——P13「`chrome.notifications` 不存在时
 worker 必须照样活着」、P14「`manifest.json` 必须把 `blockpage.html` 列进
 `web_accessible_resources`」、P15「并发的规则同步不能撞 ID」、P16「一波并发同步不能留下
@@ -231,6 +241,15 @@ P21–P25 守着「计划用量与 run」（8.9）：run 会自己走完 N 个�
 三个回答各自的效果；中途 `stop` 让 run 作废且已跑的部分不记账。对照做过：
 ① 让 run 不再自动续下一段 ⇒ P21/P22/P23 FAIL；② 允许 `skip` 掉专注 ⇒ P5/P22 FAIL；
 ③ 去掉「估计值不得低于已记单位」的夹取 ⇒ P24 FAIL。
+
+P27/P28 守着「规则的宽度与例外」（2026-10-02 这一轮）：P27 断言 `!pan.testsite.invalid` 生成的是
+`priority: 100` 的 allow 规则、filter 是 `||pan.testsite.invalid^`、且 id 落在 1000000 段；
+P28 把同一个超配额的 timed 站点跑两遍 —— 一遍带 `!` 例外、一遍不带 —— 断言不带的那遍加了一分钟
+并把标签页送去拦截页、带的那遍**一分不加、一次不跳**（这一对本身就是对照）。另外两条对照：
+① 只把 `hostUrlFilter()` 改回 `*://*.host/*` ⇒ 冒烟测试掉 4 条，其中
+「stays reachable: pan.testsite.invalid」变成 blocked=True，正是用户报的现象；
+② 只把 `content.js` 的 `hostMatches()` 改成子串匹配 ⇒ `nottestsite.invalid` 与
+`testsite.invalid.evil.invalid` 两条 FAIL。
 
 P5（本轮重写）与 P26 守着「暂停限制」：一次专注只有一次暂停、最多 2 分钟、到点自己恢复、
 恢复后这次专注再也不能暂停；休息可以一直暂停，暂停额度在下一次专注时归还。对照做过：
@@ -247,7 +266,7 @@ P5（本轮重写）与 P26 守着「暂停限制」：一次专注只有一次�
 ```powershell
 pip install playwright
 playwright install chromium
-python test/browser-smoke.py            # 当前版本，应 38/38（example.com 不可达时 36/36，那两条 SKIP）
+python test/browser-smoke.py            # 当前版本，应 48/48（example.com 不可达时 46/46，那两条 SKIP）
 ```
 
 它真的把扩展装进 Chromium（必须 `headless=False`，headless shell 不支持扩展），依次验证：
@@ -276,6 +295,14 @@ storage 种一个 `review` 状态再刷新页面）能显示并点名任务、�
 最后一组（`8`）守页面上的 **Manual**：默认折叠，点开后里面必须能读到计时设置与
 Skip 规则（它就是给用户看的说明书，内容见 `pomodoro.html` 的 `#manual-panel`）。
 对照：把 `manifest.json` 的 `web_accessible_resources` 删掉再跑，拦截那条必然 FAIL。
+
+最后一组（`9`，2026-10-02 加）守「规则的宽度与例外」，而且**不依赖网络**：测试用的主机
+（`testsite.invalid` 等）都用 `--host-resolver-rules` 指到脚本自己起的那个 HTTP 服务器上，所以
+「这个站点没被封」是靠**页面里有没有 marker** 断言的 —— 只看「没跳到 `blockpage.html`」的话，
+DNS 解析失败也会算通过。它先用 `testMatchOutcome` 单独问 DNR「裸域名到底有没有命中」（旧的
+`*://*.host/*` 在这里返回 `[]`），再真的逐个访问：裸域名 / `www.` / `mail.` 必须被封，
+`!` 例外的那个主机及其子域必须能开，`nottestsite.invalid` 与 `testsite.invalid.evil.invalid`
+也必须能开。对照见上面 P27/P28 那段的 ①②。
 
 ## 6. 参考（设计依据，非必须重读）
 
@@ -308,9 +335,16 @@ Skip 规则（它就是给用户看的说明书，内容见 `pomodoro.html` 的 
 | `7b8a69e` | 删除时显式点名「马上要复用的 id」（第 3 节），版本 `2.0.2`，补 P18 |
 | `b305529` | 规则写入改成**一次原子「删+写」**、配额/每日重置不再自己写规则（第 3 节）；修
 `syncAllRulesNow()` catch 里 `items` 越界引用（8.8-7）；补 P19/P20 与冒烟测试第 7 项 |
-| `842f137` | docs：把上面的原子写入与「陈旧错误卡片」的诊断写进本文件 |
-| 本轮 | 「计划用量 + run」（8.9）：任务的预计单位数、▶ 计划对话框、run 自动续段、
-到达估计值后提问；**专注期不可 skip**；补 P21–P25 与冒烟测试 3b/7 两组 |
+| `842f137` | docs：把原子写入与「陈旧错误卡片」的诊断写进本文件 |
+| `6226976` | 「计划用量 + run」（8.9）：任务的预计单位数、▶ 计划对话框、run 自动续段、到达估计值后提问；**专注期不可 skip**；补 P21–P25 |
+| `b3e7c5d` | 修计划对话框在 `input` 里回写自己、吃掉用户击键（`3` 变 `13`） |
+| `1768ae7` | 把说明书放进 `pomodoro.html` 的 Manual；冒烟测试第 8 组 |
+| `4b9c952` | 一次专注只能暂停一次、最多 2 分钟、到点自己恢复；补 P5/P26 |
+| `82c8e1f` | 冒烟测试：`saveRules` 不再嵌在「example.com 可达」分支里 |
+| `4b94bb4` | docs：把暂停规则与冒烟测试的网络依赖写进本文件 |
+| `683eca1` | 规则宽度：`||host^`（裸域名也封、止步于主机边界）+ `!host` 例外；`hostMatches()` 三处统一（第 3 节 / 8.4） |
+| `ce41125` | test：P27/P28 + 冒烟测试第 9 组（本地 marker 服务器 + `--host-resolver-rules`），含两条对照 |
+| 本轮 docs | 上面两条的做法、对照与计数写进本文件（第 3 节 / 第 5 节 / 8.4） |
 
 ### 已确认未做的事
 
@@ -403,6 +437,8 @@ Skip 规则（它就是给用户看的说明书，内容见 `pomodoro.html` 的 
   `TIMED_RULE_ID_OFFSET`（2000000）**：`enforceTimeLimit` / `resetDailyLimits` 用
   `id >= TIMED_RULE_ID_OFFSET` 筛 timed 规则，落进那个范围的番茄钟规则会被误删。
 - 专注期被重定向到拦截页的标签页**不会自动回跳**，需要刷新（整页会显示倒计时）。
+- 例外（`!host`，见第 3 节）**压过专注期的封禁**：allow 是 `priority: 100`、重定向是 10，
+  最高优先级胜出，所以被例外的站点在专注期也能开。`strictNow` 只决定 timed 站点装不装规则。
 
 ### 8.5 通知与 badge
 

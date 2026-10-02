@@ -40,10 +40,13 @@
 - 暂停期间页面那个 1 秒循环**不能直接 `return`**：原来 `isPaused` 就返回，结果暂停倒计时不动、
   worker 自己恢复后页面还停在「已暂停」。真浏览器冒烟测试守这条。
 - 暂停时没有 `endAt` 可等，`armPomodoroAlarm()` 必须改挂 `pauseEndsAt`，否则恢复要等 1 分钟兜底。P5 守。
+- 封一个域名时会连它的子域一起封（`||host^`），所以「封 `baidu.com` 打不开 `pan.baidu.com`」不是 bug；
+  要给某个子域开口子，就在设置里加 `!pan.baidu.com`（`!` 开头 = 该主机及其子域永不封）。
+  DNR 的 `*://*.host/*` **不匹配裸域名**，别改回去。P27/P28 与冒烟测试第 9 组守这两条。
 
 ## 怎么验
 
 ```powershell
-node test/pomodoro-harness.js background.js   # 应 26/26
+node test/pomodoro-harness.js background.js   # 应 28/28
 node test/streak-harness.js background.js     # 应 10/10
 ```
