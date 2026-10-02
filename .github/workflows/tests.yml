@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A run that hangs is now capped at 20 minutes, but a push that supersedes it
+# should not wait that long for a runner: the older run is answering a
+# question nobody is asking any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   harness:
     name: state machine + streak
