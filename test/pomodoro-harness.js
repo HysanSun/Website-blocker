@@ -779,12 +779,15 @@ const scenarios = [
           { val: 'other.com', type: 'timed', mode: 'website', limitMin: limitMin },
         ],
         // initialize() tracks the focused tab once before any alarm fires, so
-        // seed two ticks short of the limit and let the tracking alarm tip it.
+        // seed 70s short of the limit and let real time pass before the
+        // tracking alarm closes the interval. The quota moves with the clock,
+        // not with the number of calls.
         dailyUsage: { [todayKey()]: { 'other.com': limitMin * 60 * 1000 - 70000 } },
       });
       const life = runLifetime(s, { activeTab: { id: 7, url: 'https://other.com/watch' } });
       await life.settle();
       const before = life.getRules().map((r) => r.id).sort();
+      advance(90 * 1000);
       life.fireAlarm('tracking');
       await life.settle();
       const during = life.getRules().map((r) => r.id).sort();
@@ -1051,7 +1054,7 @@ const scenarios = [
       // A fresh object per lifetime: the store keeps the reference it is handed,
       // so a shared one would make the first run's write show up in the second.
       const seeded = 29 * MIN;
-      const tickMs = 60 * 1000;   // TRACKING_INTERVAL_SEC
+      const tickMs = 90 * 1000;   // the interval each run closes below
       const usageFor = () => {
         const u = {}; u[todayKey()] = { 'testsite.invalid': seeded }; return u;
       };
@@ -1059,6 +1062,7 @@ const scenarios = [
       const plain = seed({ rules: [timed], dailyUsage: usageFor() });
       const plainLife = runLifetime(plain, { activeTab: openTab });
       await plainLife.settle();
+      advance(90 * 1000);
       plainLife.fireAlarm('tracking');
       await drain();
 
@@ -1068,6 +1072,7 @@ const scenarios = [
       });
       const excLife = runLifetime(excepted, { activeTab: openTab });
       await excLife.settle();
+      advance(90 * 1000);
       excLife.fireAlarm('tracking');
       await drain();
 
@@ -1076,19 +1081,103 @@ const scenarios = [
     },
     expect: (r) => {
       const used = (s) => s.local.dailyUsage[todayKey()]['testsite.invalid'];
-      // Both lifetimes take the same two ticks (the one initialize() runs and
-      // the one the alarm runs), so the pair isolates the exception. The plain
-      // run crosses the limit on the first tick, which is what redirects the
-      // tab; the excepted run must not move at all.
-      const ok = used(r.plain) === r.seeded + 2 * r.tickMs && r.plainTabs.length === 1 &&
+      // Both lifetimes see the same 90 seconds of real time (the tracker only
+      // closes an interval, so a call with no elapsed time charges nothing),
+      // which is what isolates the exception. The plain run crosses the limit
+      // on that interval, which is what redirects the tab; the excepted run
+      // must not move at all.
+      const ok = used(r.plain) === r.seeded + r.tickMs && r.plainTabs.length === 1 &&
         used(r.excepted) === r.seeded && r.excTabs.length === 0;
       return [ok, 'plain=' + (used(r.plain) / MIN) + 'min tabs=' + r.plainTabs.length +
         ' excepted=' + (used(r.excepted) / MIN) + 'min tabs=' + r.excTabs.length +
         ' seeded=' + (r.seeded / MIN) + 'min'];
     },
   },
+  {
+    name: 'P29 the quota moves with the clock, not with the number of calls',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [{ val: 'testsite.invalid', mode: 'website', type: 'timed', limitMin: 60 }],
+      });
+      const life = runLifetime(s, { activeTab: { id: 3, url: 'https://testsite.invalid/feed' } });
+      await life.settle();
+      // Five triggers inside the same instant: this used to charge five whole
+      // minutes. Nothing has elapsed, so nothing may be charged.
+      for (let i = 0; i < 5; i++) {
+        life.fireAlarm('tracking');
+        await drain();
+      }
+      const burst = (s.local.dailyUsage[todayKey()] || {})['testsite.invalid'] || 0;
+      advance(30 * 1000);
+      life.fireAlarm('tracking');
+      await drain();
+      const after30 = (s.local.dailyUsage[todayKey()] || {})['testsite.invalid'] || 0;
+      advance(30 * 1000);
+      life.fireAlarm('tracking');
+      await drain();
+      const after60 = (s.local.dailyUsage[todayKey()] || {})['testsite.invalid'] || 0;
+      return { burst, after30, after60 };
+    },
+    expect: (r) => {
+      const ok = r.burst === 0 && r.after30 === 30 * 1000 && r.after60 === 60 * 1000;
+      return [ok, 'burst=' + r.burst + 'ms after30s=' + r.after30 + 'ms after60s=' + r.after60 + 'ms'];
+    },
+  },
+  {
+    name: 'P30 a gap nobody watched (sleep, shutdown) is not charged',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [{ val: 'testsite.invalid', mode: 'website', type: 'timed', limitMin: 60 }],
+      });
+      // The clock was left behind three hours ago by a browser that is only
+      // starting up again now.
+      s.local.usageClock = { at: T0 - 3 * 60 * MIN, domain: 'testsite.invalid', limitMin: 60 };
+      const life = runLifetime(s, { activeTab: { id: 3, url: 'https://testsite.invalid/feed' } });
+      await life.settle();
+      life.fireAlarm('tracking');
+      await drain();
+      const used = (s.local.dailyUsage[todayKey()] || {})['testsite.invalid'] || 0;
+      // The clock itself must have been pulled forward, so the next interval is
+      // measured from now rather than from the stale mark.
+      const clockAt = s.local.usageClock && s.local.usageClock.at;
+      return { used, restarted: clockAt === NOW };
+    },
+    expect: (r) => {
+      const ok = r.used === 0 && r.restarted;
+      return [ok, 'chargedAfterSleep=' + r.used + 'ms clockRestarted=' + r.restarted];
+    },
+  },
+  {
+    name: 'P31 moving between timed sites settles the one being left',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [
+          { val: 'a.invalid', mode: 'website', type: 'timed', limitMin: 60 },
+          { val: 'b.invalid', mode: 'website', type: 'timed', limitMin: 60 },
+        ],
+      });
+      const tab = { id: 3, url: 'https://a.invalid/one' };
+      const life = runLifetime(s, { activeTab: tab });
+      await life.settle();
+      advance(45 * 1000);
+      tab.url = 'https://b.invalid/two';
+      life.fireAlarm('tracking');
+      await drain();
+      advance(15 * 1000);
+      life.fireAlarm('tracking');
+      await drain();
+      const usage = s.local.dailyUsage[todayKey()] || {};
+      return { a: usage['a.invalid'] || 0, b: usage['b.invalid'] || 0 };
+    },
+    expect: (r) => {
+      const ok = r.a === 45 * 1000 && r.b === 15 * 1000;
+      return [ok, 'a=' + (r.a / 1000) + 's b=' + (r.b / 1000) + 's'];
+    },
+  },
 ];
-
 (async () => {
   for (const sc of scenarios) {
     let r;

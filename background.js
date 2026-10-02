@@ -18,6 +18,7 @@ const STORAGE_KEYS = {
   HAD_HOST_ACCESS: 'hadHostAccess',
   POMODORO: 'pomodoro',
   POMODORO_SETTINGS: 'pomodoroSettings',
+  USAGE_CLOCK: 'usageClock',
   TODO: 'todo'
 };
 // Liveness marker in storage.session: it rides out service-worker suspension
@@ -336,21 +337,75 @@ function getTodayKey() {
   return new Date().toLocaleDateString('zh-CN');
 }
 
-let activeTimedDomain = null;
+// The daily quota is elapsed wall-clock time, never "how many times this
+// function ran". usageClock is the single settlement point: it remembers when
+// the tracker last looked and which timed rule was in front of the user, and
+// every trigger (the 1-minute alarm, a tab switch, a page finishing its load)
+// only closes the interval that has elapsed since then.
+//
+// Two rules make that safe:
+//   - An interval longer than USAGE_MAX_GAP_MS is not charged at all. The
+//     machine slept, the browser was closed or the worker was parked, so nobody
+//     was looking at the page and there is nothing to charge for.
+//   - Only the gap between two observations is ever charged, so five triggers
+//     inside the same second charge five times ~0s instead of five minutes.
+const USAGE_MAX_GAP_MS = 2 * TRACKING_INTERVAL_SEC * 1000;
+
+function emptyUsageClock(now) {
+  return { at: now, domain: null, limitMin: 0 };
+}
+
+// A clock we cannot trust (missing, corrupt, dated in the future) starts over
+// at `now` with nothing on the meter: that charges zero and loses nothing.
+function usageClockFrom(raw, now) {
+  const clock = (raw && typeof raw === 'object') ? raw : {};
+  const at = Number(clock.at);
+  if (!isFinite(at) || at <= 0 || at > now) return emptyUsageClock(now);
+  const domain = (typeof clock.domain === 'string' && clock.domain) ? clock.domain : null;
+  const limitMin = Number(clock.limitMin);
+  return {
+    at: at,
+    domain: domain,
+    limitMin: (isFinite(limitMin) && limitMin > 0) ? limitMin : 30
+  };
+}
+
+// Milliseconds worth charging for the interval that just ended.
+function creditForInterval(clock, now) {
+  if (!clock.domain) return 0;
+  const elapsed = now - clock.at;
+  if (!isFinite(elapsed) || elapsed <= 0) return 0;
+  if (elapsed > USAGE_MAX_GAP_MS) return 0;
+  return elapsed;
+}
+
+// The timed rule that owns this host, or null. An excepted host never matches:
+// the user said not to apply their rules there, and the daily quota is one of
+// them.
+function timedRuleForHost(items, host) {
+  if (isExceptedHost(items, host)) return null;
+  for (const item of items) {
+    if (isException(item)) continue;
+    if (item.type === 'timed' && item.mode === 'website' && hostMatches(host, item.val)) {
+      return item;
+    }
+  }
+  return null;
+}
 
 async function trackActiveTab() {
   try {
-    // 3a. Check if date changed → reset if needed
+    const now = Date.now();
     const today = getTodayKey();
-    const { [STORAGE_KEYS.DAILY_USAGE]: storedUsage } = await chrome.storage.local.get([STORAGE_KEYS.DAILY_USAGE]);
-    const dailyUsage = storedUsage || {};
+    const local = await chrome.storage.local.get([
+      STORAGE_KEYS.DAILY_USAGE, STORAGE_KEYS.USAGE_CLOCK
+    ]);
+    const dailyUsage = local[STORAGE_KEYS.DAILY_USAGE] || {};
+    const clock = usageClockFrom(local[STORAGE_KEYS.USAGE_CLOCK], now);
 
-    // Ensure today's entry exists
-    if (!dailyUsage[today]) {
-      dailyUsage[today] = {};
-      // New day — sync rules to remove expired timed blocks
-      await syncAllRules();
-    }
+    // 3a. Ensure today's entry exists
+    const dayIsNew = !dailyUsage[today];
+    if (dayIsNew) dailyUsage[today] = {};
 
     // Clean up old dates (keep only yesterday + today, max 2 entries)
     const keys = Object.keys(dailyUsage).sort();
@@ -358,60 +413,51 @@ async function trackActiveTab() {
       delete dailyUsage[keys.shift()];
     }
 
-    // 3b. Get active tab
+    // 3b. Work out which timed rule owns the tab in front of the user
+    let matched = null;
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab || !tab.url) {
-      activeTimedDomain = null;
-      return;
+    if (tab && tab.url) {
+      const { [STORAGE_KEYS.BLOCKED_ITEMS]: storedItems } =
+        await chrome.storage.sync.get([STORAGE_KEYS.BLOCKED_ITEMS]);
+      matched = timedRuleForHost(storedItems || [], hostOfUrl(tab.url));
     }
 
-    // 3c. Check if active tab matches any timed rule
-    const { [STORAGE_KEYS.BLOCKED_ITEMS]: storedItems } = await chrome.storage.sync.get([STORAGE_KEYS.BLOCKED_ITEMS]);
-    const items = storedItems || [];
-    let matchedDomain = null;
-    let matchedLimitMin = 30;
+    // 3c. Close the interval that just ended, then open the new one
+    const charged = creditForInterval(clock, now);
+    const settledDomain = clock.domain;
+    const settledLimitMin = clock.limitMin;
+    const prevMs = settledDomain ? (dailyUsage[today][settledDomain] || 0) : 0;
+    if (charged > 0) dailyUsage[today][settledDomain] = prevMs + charged;
 
-    // An excepted host is not counted and not enforced: the user said not to
-    // apply their rules here, and that has to include the daily quota.
-    const tabHost = hostOfUrl(tab.url);
-    const tabExcepted = isExceptedHost(items, tabHost);
-
-    for (const item of items) {
-      if (isException(item)) continue;
-      if (!tabExcepted && item.type === 'timed' && item.mode === 'website') {
-        if (hostMatches(tabHost, item.val)) {
-          matchedDomain = item.val;
-          matchedLimitMin = item.limitMin || 30;
-          break;
-        }
+    // The clock and the total are written together: a stale clock would charge
+    // the next interval to the wrong site for the wrong amount.
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.DAILY_USAGE]: dailyUsage,
+      [STORAGE_KEYS.USAGE_CLOCK]: {
+        at: now,
+        domain: matched ? matched.val : null,
+        limitMin: matched ? (matched.limitMin || 30) : 0
       }
-    }
+    });
 
-    // 3d. Accumulate time if on a timed site
-    if (matchedDomain) {
-      activeTimedDomain = matchedDomain;
-      const prevMs = dailyUsage[today][matchedDomain] || 0;
-      dailyUsage[today][matchedDomain] = prevMs + (TRACKING_INTERVAL_SEC * 1000);
+    // A new day clears every quota rule, so recompute the whole set once.
+    if (dayIsNew) await syncAllRules();
 
-      await chrome.storage.local.set({ [STORAGE_KEYS.DAILY_USAGE]: dailyUsage });
+    if (charged > 0) {
+      const limitMs = settledLimitMin * 60 * 1000;
+      const newMs = dailyUsage[today][settledDomain];
 
-      const limitMs = matchedLimitMin * 60 * 1000;
-      const newMs = dailyUsage[today][matchedDomain];
-
-      // 3e. Check if just exceeded limit → enforce
+      // 3d. Check if just exceeded limit → enforce
       if (prevMs < limitMs && newMs >= limitMs) {
-        console.log('[Blocker] Time limit reached for', matchedDomain);
-        await enforceTimeLimit(matchedDomain, matchedLimitMin);
+        console.log('[Blocker] Time limit reached for', settledDomain);
+        await enforceTimeLimit(settledDomain, settledLimitMin);
       }
 
-      // 3f. Warning at 5 minutes remaining
+      // 3e. Warning at 5 minutes remaining
       const remainingMs = limitMs - newMs;
       if (remainingMs > 0 && remainingMs <= 5 * 60 * 1000 && prevMs > limitMs - 6 * 60 * 1000) {
-        const remainingMin = Math.ceil(remainingMs / 60000);
-        showWarningNotification(matchedDomain, remainingMin);
+        showWarningNotification(settledDomain, Math.ceil(remainingMs / 60000));
       }
-    } else {
-      activeTimedDomain = null;
     }
   } catch (err) {
     // Tab query can fail if no window is focused — non-critical
@@ -471,7 +517,12 @@ async function resetDailyLimitsNow() {
     if (key !== today) delete dailyUsage[key];
   });
   dailyUsage[today] = {};
-  await chrome.storage.local.set({ [STORAGE_KEYS.DAILY_USAGE]: dailyUsage });
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.DAILY_USAGE]: dailyUsage,
+    // The clock is reset with the totals: the interval that was open at
+    // midnight belongs to the day that just ended.
+    [STORAGE_KEYS.USAGE_CLOCK]: emptyUsageClock(Date.now())
+  });
 
   // The rules follow from the usage that was just cleared: syncAllRulesNow
   // drops every quota rule on its own and keeps whatever a focus session is
