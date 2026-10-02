@@ -219,7 +219,7 @@ node test/streak-harness.js background.js            # 当前版本，应 10/10
 harness 还有区分度：
 
 ```powershell
-git show eecd208:background.js > $env:TEMP\baseline.js   # eecd208 = 修复前的快照
+git show 098e86e:background.js > $env:TEMP\baseline.js   # 098e86e = 修复前的快照
 node test/streak-harness.js $env:TEMP\baseline.js        # 应 5/10，失败项即「不应清零却清零」
 ```
 
@@ -330,37 +330,37 @@ DNS 解析失败也会算通过。它先用 `testMatchOutcome` 单独问 DNR「�
 
 | commit | 内容 |
 |---|---|
-| `eecd208` | 修复前的完整快照 —— **harness 的对照基线** |
-| `57d5d37` | streak 修复：只在「关扩展」和「手动重置」时清零 |
-| `6042ea4` | 补上第三条：撤销站点访问权限时清零 |
-| `b1e64d0` | 加 HANDOFF.md / CLAUDE.md / streak harness |
-| `5c6acfd` | 番茄钟 + Todo（独立窗口版），见第 8 节 |
-| `22ade24` | 修 worker 启动即崩（8.8-4）与拦截重定向失效（8.8-5），补 P13/P14 与真浏览器冒烟测试 |
-| `83f35ed` | DNR 规则写入串行化（见第 3 节），补 P15/P16 |
-| `8c005c9` | 规则写入改成原子更新 + 冲突重试（见第 3 节），补 P17 |
-| `69ecc4e` | 版本升到 `2.0.1`（用来判断 reload 是否生效）+ 失败日志带上 id，冒烟测试盯 worker 控制台 |
-| `0aee159` | 删除时显式点名「马上要复用的 id」（第 3 节），版本 `2.0.2`，补 P18 |
-| `5661371` | 规则写入改成**一次原子「删+写」**、配额/每日重置不再自己写规则（第 3 节）；修
+| `098e86e` | 修复前的完整快照 —— **harness 的对照基线** |
+| `4ecd7b5` | streak 修复：只在「关扩展」和「手动重置」时清零 |
+| `7090749` | 补上第三条：撤销站点访问权限时清零 |
+| `a250063` | 加 HANDOFF.md / CLAUDE.md / streak harness |
+| `b5028bc` | 番茄钟 + Todo（独立窗口版），见第 8 节 |
+| `60ed3b1` | 修 worker 启动即崩（8.8-4）与拦截重定向失效（8.8-5），补 P13/P14 与真浏览器冒烟测试 |
+| `9e5df05` | DNR 规则写入串行化（见第 3 节），补 P15/P16 |
+| `806faa5` | 规则写入改成原子更新 + 冲突重试（见第 3 节），补 P17 |
+| `f3099b5` | 版本升到 `2.0.1`（用来判断 reload 是否生效）+ 失败日志带上 id，冒烟测试盯 worker 控制台 |
+| `a4793d4` | 删除时显式点名「马上要复用的 id」（第 3 节），版本 `2.0.2`，补 P18 |
+| `9bb22a4` | 规则写入改成**一次原子「删+写」**、配额/每日重置不再自己写规则（第 3 节）；修
 `syncAllRulesNow()` catch 里 `items` 越界引用（8.8-7）；补 P19/P20 与冒烟测试第 7 项 |
-| `af0be6e` | docs：把原子写入与「陈旧错误卡片」的诊断写进本文件 |
-| `169ab4d` | 「计划用量 + run」（8.9）：任务的预计单位数、▶ 计划对话框、run 自动续段、到达估计值后提问；**专注期不可 skip**；补 P21–P25 |
-| `2e1c7aa` | 修计划对话框在 `input` 里回写自己、吃掉用户击键（`3` 变 `13`） |
-| `711aa3e` | 把说明书放进 `pomodoro.html` 的 Manual；冒烟测试第 8 组 |
-| `5e5ecc8` | 一次专注只能暂停一次、最多 2 分钟、到点自己恢复；补 P5/P26 |
-| `dccf492` | 冒烟测试：`saveRules` 不再嵌在「example.com 可达」分支里 |
-| `da44899` | docs：把暂停规则与冒烟测试的网络依赖写进本文件 |
-| `062d2b4` | 规则宽度：`||host^`（裸域名也封、止步于主机边界）+ `!host` 例外；`hostMatches()` 三处统一（第 3 节 / 8.4） |
-| `03786ff` | test：P27/P28 + 冒烟测试第 9 组（本地 marker 服务器 + `--host-resolver-rules`），含两条对照 |
-| `da44899`、`062d2b4`、`03786ff`、`40b558d` | 规则宽度 / 例外语义 / 对照测试，做法写进第 3 节 |
-| `491c277` | docs：`PRODUCT-REVIEW.md`（产品评审 + 四档线路图），§6 是「做完」的定义 |
-| `427c9e7` | **档位 ①-1**：配额按「经过的时间」结算（`usageClock`），补 P29–P31 |
-| `64f1472` | **档位 ①-2..9**：一套反馈层（`ui.js`）、AA 对比度配色、顶栏进页面顶部、`Close this tab`、真通知、streak 重置挪进设置页、规则可编辑 + 例外徽章、方形图标 |
-| `e38cb87` | **档位 ②**：时段规则、临时放行、快捷键、提醒音、导出/导入；补 P32–P35 |
-| `93275a2` | **档位 ③**：90 天本地趋势 + 7 天回顾；补 P36/P37 |
-| `97f1852` | **档位 ④**：`_locales` + `PRIVACY.md` + 仓库卫生（`docs/legacy/`），版本 `2.1.0` |
-| `7ad2ebc` | 开源准备：`LICENSE`(MIT)、`.gitignore`、`README.md`、GitHub Actions（两套 harness + `xvfb` 冒烟）、`docs/screenshots/` 真截图、页脚署名 |
-| `7145323` | 页脚只留 `© 2026 Hysan Sun`，撤掉邮箱/微信 —— 随后两次 `filter-branch` 让联系方式从**整段历史**里消失 |
-| `846cbe5` | docs：历史重写后两份文档里的 commit 哈希全部失效，按提交顺序重映射（规则 id 段位与示例值不动） |
+| `90b8e05` | docs：把原子写入与「陈旧错误卡片」的诊断写进本文件 |
+| `71cfab6` | 「计划用量 + run」（8.9）：任务的预计单位数、▶ 计划对话框、run 自动续段、到达估计值后提问；**专注期不可 skip**；补 P21–P25 |
+| `ebeb92c` | 修计划对话框在 `input` 里回写自己、吃掉用户击键（`3` 变 `13`） |
+| `58a45bb` | 把说明书放进 `pomodoro.html` 的 Manual；冒烟测试第 8 组 |
+| `bee40e2` | 一次专注只能暂停一次、最多 2 分钟、到点自己恢复；补 P5/P26 |
+| `329db6e` | 冒烟测试：`saveRules` 不再嵌在「example.com 可达」分支里 |
+| `e8023b2` | docs：把暂停规则与冒烟测试的网络依赖写进本文件 |
+| `06f333a` | 规则宽度：`||host^`（裸域名也封、止步于主机边界）+ `!host` 例外；`hostMatches()` 三处统一（第 3 节 / 8.4） |
+| `d8b6193` | test：P27/P28 + 冒烟测试第 9 组（本地 marker 服务器 + `--host-resolver-rules`），含两条对照 |
+| `e8023b2`、`06f333a`、`d8b6193`、`3a8612b` | 规则宽度 / 例外语义 / 对照测试，做法写进第 3 节 |
+| `6696464` | docs：`PRODUCT-REVIEW.md`（产品评审 + 四档线路图），§6 是「做完」的定义 |
+| `fbb9ab6` | **档位 ①-1**：配额按「经过的时间」结算（`usageClock`），补 P29–P31 |
+| `38042de` | **档位 ①-2..9**：一套反馈层（`ui.js`）、AA 对比度配色、顶栏进页面顶部、`Close this tab`、真通知、streak 重置挪进设置页、规则可编辑 + 例外徽章、方形图标 |
+| `843a6cb` | **档位 ②**：时段规则、临时放行、快捷键、提醒音、导出/导入；补 P32–P35 |
+| `036ff12` | **档位 ③**：90 天本地趋势 + 7 天回顾；补 P36/P37 |
+| `9b5cc0c` | **档位 ④**：`_locales` + `PRIVACY.md` + 仓库卫生（`docs/legacy/`），版本 `2.1.0` |
+| `ef22b91` | 开源准备：`LICENSE`(MIT)、`.gitignore`、`README.md`、GitHub Actions（两套 harness + `xvfb` 冒烟）、`docs/screenshots/` 真截图、页脚署名 |
+| `085c48d` | 页脚只留 `© 2026 Hysan Sun`，撤掉邮箱/微信 —— 随后两次 `filter-branch` 让联系方式从**整段历史**里消失 |
+| `26068de` | docs：历史重写后两份文档里的 commit 哈希全部失效，按提交顺序重映射（规则 id 段位与示例值不动） |
 
 ### 已确认未做的事
 
@@ -550,7 +550,7 @@ DNS 解析失败也会算通过。它先用 `testMatchOutcome` 单独问 DNR「�
    重新渲染的。所以他 reload 到 2.0.2 之后，卡片上还写着 `background.js:110` —— 而 2.0.2 的
    第 110 行已经是 `seen.add(rule.id)`，只有 **2.0.1** 的第 110 行才是那个 `updateDynamicRules`。
    判断旧卡片的两招：① 用 `git show <旧 commit>:background.js` 对一下行号对应哪个版本；
-   ② 看日志格式 —— `69ecc4e` 之后的行尾会带「wanted rule ids / live rule ids」，旧卡片没有
+   ② 看日志格式 —— `f3099b5` 之后的行尾会带「wanted rule ids / live rule ids」，旧卡片没有
    这一段。确认是旧卡片后，点错误页右上角「全部清除」。**报错不能只看卡片，要看它属于哪个版本。**
 7. **catch 块里不要引用只在 `try` 里声明的 `const`。** `syncAllRulesNow()` 的 catch 曾经引用
    `items`（`const items = ...` 声明在 try 内部）→ 规则写入一旦失败，catch 自己抛

@@ -377,10 +377,10 @@ npx impeccable@latest --json pomodoro.html blockpage.html settings.html   # 50 f
 
 | 档位 | commit | 实际做完的 |
 |---|---|---|
-| ① | `427c9e7` `64f1472` | BUG-1（`usageClock` 按经过时间结算）、BUG-2(编辑)、BUG-3、BUG-4、BUG-5、BUG-6、BUG-7、BUG-8、BUG-9、BUG-10 |
-| ② | `e38cb87` | 时段规则、临时放行、快捷键、提醒音、导出/导入 |
-| ③ | `93275a2` | `storage.local.stats` 90 天 + 7 天回顾卡 |
-| ④ | `97f1852` | `_locales/`、`PRIVACY.md`、仓库卫生、单一版本源 |
+| ① | `fbb9ab6` `38042de` | BUG-1（`usageClock` 按经过时间结算）、BUG-2(编辑)、BUG-3、BUG-4、BUG-5、BUG-6、BUG-7、BUG-8、BUG-9、BUG-10 |
+| ② | `843a6cb` | 时段规则、临时放行、快捷键、提醒音、导出/导入 |
+| ③ | `036ff12` | `storage.local.stats` 90 天 + 7 天回顾卡 |
+| ④ | `9b5cc0c` | `_locales/`、`PRIVACY.md`、仓库卫生、单一版本源 |
 
 验证：harness 37/37（P1–P37）、streak harness 10/10、真 Chromium 冒烟 57/57、截图 6 张。
 版本 `2.0.2` → `2.1.0`。
