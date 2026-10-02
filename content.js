@@ -119,6 +119,11 @@ function checkAndBlock() {
         var currentUrl = window.location.href.toLowerCase();
         var host = window.location.hostname.toLowerCase();
 
+        // This runs at document_start in every frame, so the empty case - which
+        // is the common one on a fresh install - leaves before touching local
+        // storage at all.
+        if (!exceptionRules.length && !completeRules.length && !timedRules.length) return;
+
         // A temporary unlock is the same allow rule as an exception, only with
         // an expiry, so it wins in exactly the same place.
         chrome.storage.local.get(['dailyUsage', 'pomodoro', 'tempUnlocks'], function (localRes) {

@@ -1184,6 +1184,10 @@ const scenarios = [
       return [ok, 'a=' + (r.a / 1000) + 's b=' + (r.b / 1000) + 's'];
     },
   },
+  // P32-P37 land with the tier-2/3 features. Checked as controls against
+  // 7bc7af0 (the build before them): all six fail there, so none of them is
+  // passing for free. P32-P35 fail on the missing window/unlock code and
+  // P36/P37 on the missing trend.
   {
     name: 'P32 a rule with a time window is absent outside it, and present inside',
     run: async () => {
