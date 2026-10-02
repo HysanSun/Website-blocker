@@ -358,6 +358,9 @@ DNS 解析失败也会算通过。它先用 `testMatchOutcome` 单独问 DNR「�
 | `e38cb87` | **档位 ②**：时段规则、临时放行、快捷键、提醒音、导出/导入；补 P32–P35 |
 | `93275a2` | **档位 ③**：90 天本地趋势 + 7 天回顾；补 P36/P37 |
 | `97f1852` | **档位 ④**：`_locales` + `PRIVACY.md` + 仓库卫生（`docs/legacy/`），版本 `2.1.0` |
+| `7ad2ebc` | 开源准备：`LICENSE`(MIT)、`.gitignore`、`README.md`、GitHub Actions（两套 harness + `xvfb` 冒烟）、`docs/screenshots/` 真截图、页脚署名 |
+| `7145323` | 页脚只留 `© 2026 Hysan Sun`，撤掉邮箱/微信 —— 随后两次 `filter-branch` 让联系方式从**整段历史**里消失 |
+| `846cbe5` | docs：历史重写后两份文档里的 commit 哈希全部失效，按提交顺序重映射（规则 id 段位与示例值不动） |
 
 ### 已确认未做的事
 
