@@ -353,10 +353,24 @@ function renderUnlocks() {
     });
 }
 
+// A worker that has never heard of an action answers "Unknown action". That is
+// not the action failing: it is a page that is newer than the service worker,
+// which is what an unpacked extension looks like after the files on disk are
+// updated but chrome://extensions was not reloaded. Saying "Could not unlock"
+// there sends the user looking for a bug in the feature that is not there.
+function staleWorker(res) {
+    return !!(res && res.error === 'Unknown action');
+}
+
 function requestUnlock(val) {
     chrome.runtime.sendMessage({ action: 'tempUnlock', val: val, minutes: TEMP_UNLOCK_MIN },
         function (res) {
-            if (!res || !res.success) { showToast('Could not unlock ' + val, true); return; }
+            if (!res || !res.success) {
+                showToast(staleWorker(res)
+                    ? 'Reload the extension at chrome://extensions - this page is newer than its worker'
+                    : 'Could not unlock ' + val, true);
+                return;
+            }
             showToast('Unlocked for ' + TEMP_UNLOCK_MIN + ' min: ' + val);
             loadAndRender();
         });
@@ -364,7 +378,12 @@ function requestUnlock(val) {
 
 function revokeUnlock(val) {
     chrome.runtime.sendMessage({ action: 'tempUnlock', val: val, minutes: 0 }, function (res) {
-        if (!res || !res.success) { showToast('Could not lock ' + val, true); return; }
+        if (!res || !res.success) {
+            showToast(staleWorker(res)
+                ? 'Reload the extension at chrome://extensions - this page is newer than its worker'
+                : 'Could not lock ' + val, true);
+            return;
+        }
         showToast('Locked again: ' + val);
         loadAndRender();
     });

@@ -1766,7 +1766,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
       default:
-        sendResponse({ success: false, error: 'Unknown action' });
+        // A page can be newer than the worker: updating an unpacked extension
+        // on disk does not reload its service worker, so the page sends actions
+        // this build has never heard of. Name the action - a bare "Unknown
+        // action" reads like a broken feature instead of a stale worker.
+        console.warn('[Blocker] Unknown action "' + message.action +
+          '" - the page is newer than the running service worker. Reload the extension.');
+        sendResponse({ success: false, error: 'Unknown action', unknownAction: message.action });
     }
   })();
   return true; // Keep channel open for async response

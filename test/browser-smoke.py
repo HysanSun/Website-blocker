@@ -274,6 +274,23 @@ def main():
                   or "Outside its hours" in st.eval_on_selector("#rules-list", "e=>e.textContent"))
             check("the settings page offers a per-rule unlock",
                   st.eval_on_selector_all(".rule-unlock-btn", "els=>els.length") >= 2)
+            # ...and clicking it has to actually grant the host. "The button is
+            # there" was the whole check, which is how a worker that had never
+            # heard of tempUnlock still looked like a working feature.
+            st.click(".rule-unlock-btn")
+            st.wait_for_timeout(1200)
+            unlocked = sw.evaluate("async () => JSON.stringify(await chrome.storage.local.get(['tempUnlocks']))")
+            toast = st.eval_on_selector_all(".wb-toast", "els=>els.map(e=>e.textContent).join(' | ')")
+            check("clicking Unlock grants a timed allow rule",
+                  "example.com" in unlocked and "Unlocked for" in toast,
+                  "unlocks=%s toast=%s" % (unlocked[:90], toast))
+            # The stale-worker contract: a worker that does not know an action
+            # names it, so the page can tell "reload the extension" apart from
+            # "this feature is broken".
+            unknown = st.evaluate("""() => new Promise(res => chrome.runtime.sendMessage(
+                {action:'noSuchAction'}, r => res(JSON.stringify(r))))""")
+            check("an unknown action names itself back",
+                  "noSuchAction" in unknown.replace(" ", ""), unknown[:120])
             st.close()
 
             # 7. The review question and the skip rule. Waiting out a real
