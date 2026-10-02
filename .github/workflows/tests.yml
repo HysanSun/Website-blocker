@@ -28,6 +28,13 @@ jobs:
   browser:
     name: real Chromium smoke test
     runs-on: ubuntu-latest
+    # The first push sat in the download step for over half an hour. Fail at 20
+    # minutes instead of holding a runner until the 6-hour cap.
+    timeout-minutes: 20
+    env:
+      # Pinned, so the cache key below means something and CI runs the same
+      # Playwright these tests were written against.
+      PLAYWRIGHT_VERSION: '1.63.0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,9 +42,19 @@ jobs:
           python-version: '3.12'
 
       - name: install playwright
-        run: |
-          pip install playwright
-          playwright install --with-deps chromium
+        run: pip install playwright==${{ env.PLAYWRIGHT_VERSION }}
+
+      # The browser is ~170MB and is by far the slowest part of this job.
+      # Keyed on the pinned version, so an ordinary push only pays for the
+      # system libraries that --with-deps installs.
+      - name: cache the browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
+
+      - name: install the browser and its system libraries
+        run: playwright install --with-deps chromium
 
       # Chrome will not load an extension into a headless browser, so the smoke
       # test opens a real window on a virtual display.
