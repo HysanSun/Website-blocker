@@ -185,6 +185,10 @@ function runLifetime(stores, opts) {
     Date: FakeDate,
     Promise, JSON, Math, Object, Array, String, Number, Boolean,
     Error, RegExp, isNaN, isFinite, parseInt, parseFloat, Set, Map, Symbol,
+    // A vm context only gets ECMAScript intrinsics, so the host objects the
+    // worker relies on have to be handed in. The tracker parses the active
+    // tab's host with URL.
+    URL,
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
@@ -1004,6 +1008,83 @@ const scenarios = [
         ' resumedEndIn=' + ((r.resumed.endAt - (T0 + 30 * MIN)) / MIN) + 'min afterBreak=' +
         r.afterBreak.phase + '/pauseUsed' + r.afterBreak.pauseUsed + ' nextFocusPause=' +
         r.nextFocus.pauseUsed + '/' + ((r.nextFocus.pauseEndsAt || 0) - (T0 + 30 * MIN)) / MIN + 'min'];
+    },
+  },
+
+  {
+    name: 'P27 a "!" rule opens a hole in a wider block, at a filter that covers the apex',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [
+          { val: 'testsite.invalid', mode: 'website', type: 'block' },
+          { val: '!pan.testsite.invalid', mode: 'website', type: 'block' },
+        ],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      return { rules: life.getRules() };
+    },
+    expect: (r) => {
+      const redirects = r.rules.filter((x) => x.action.type === 'redirect');
+      const allows = r.rules.filter((x) => x.action.type === 'allow');
+      const blockFilter = redirects.map((x) => x.condition.urlFilter);
+      const allowFilter = allows.map((x) => x.condition.urlFilter);
+      // The old `*://*.host/*` form neither matched the apex nor stopped at a
+      // host boundary; the unit band above 1000000 keeps the allow out of every
+      // "id >= TIMED_RULE_ID_OFFSET" sweep.
+      const ok = r.rules.length === 2 &&
+        blockFilter.indexOf('||testsite.invalid^') !== -1 &&
+        blockFilter.every((f) => f.indexOf('*://*.') === -1) &&
+        allowFilter.indexOf('||pan.testsite.invalid^') !== -1 &&
+        allows.every((a) => a.priority > 10 && a.id >= 1000000 && a.id < 1500000);
+      return [ok, 'redirect=' + JSON.stringify(blockFilter) + ' allow=' + JSON.stringify(allowFilter) +
+        ' ids=' + JSON.stringify(r.rules.map((x) => x.id))];
+    },
+  },
+  {
+    name: 'P28 an excepted host is neither counted nor enforced; a plain host still is',
+    run: async () => {
+      NOW = T0;
+      const timed = { val: 'testsite.invalid', mode: 'website', type: 'timed', limitMin: 30 };
+      const openTab = { id: 7, url: 'http://pan.testsite.invalid/disk' };
+      // A fresh object per lifetime: the store keeps the reference it is handed,
+      // so a shared one would make the first run's write show up in the second.
+      const seeded = 29 * MIN;
+      const tickMs = 60 * 1000;   // TRACKING_INTERVAL_SEC
+      const usageFor = () => {
+        const u = {}; u[todayKey()] = { 'testsite.invalid': seeded }; return u;
+      };
+
+      const plain = seed({ rules: [timed], dailyUsage: usageFor() });
+      const plainLife = runLifetime(plain, { activeTab: openTab });
+      await plainLife.settle();
+      plainLife.fireAlarm('tracking');
+      await drain();
+
+      const excepted = seed({
+        rules: [timed, { val: '!pan.testsite.invalid', mode: 'website', type: 'block' }],
+        dailyUsage: usageFor(),
+      });
+      const excLife = runLifetime(excepted, { activeTab: openTab });
+      await excLife.settle();
+      excLife.fireAlarm('tracking');
+      await drain();
+
+      return { plain, excepted, plainTabs: plainLife.getTabUpdates(), excTabs: excLife.getTabUpdates(),
+        seeded, tickMs };
+    },
+    expect: (r) => {
+      const used = (s) => s.local.dailyUsage[todayKey()]['testsite.invalid'];
+      // Both lifetimes take the same two ticks (the one initialize() runs and
+      // the one the alarm runs), so the pair isolates the exception. The plain
+      // run crosses the limit on the first tick, which is what redirects the
+      // tab; the excepted run must not move at all.
+      const ok = used(r.plain) === r.seeded + 2 * r.tickMs && r.plainTabs.length === 1 &&
+        used(r.excepted) === r.seeded && r.excTabs.length === 0;
+      return [ok, 'plain=' + (used(r.plain) / MIN) + 'min tabs=' + r.plainTabs.length +
+        ' excepted=' + (used(r.excepted) / MIN) + 'min tabs=' + r.excTabs.length +
+        ' seeded=' + (r.seeded / MIN) + 'min'];
     },
   },
 ];

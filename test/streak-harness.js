@@ -110,6 +110,10 @@ function runLifetime(stores, opts) {
     clearTimeout: () => {},
     Date, Promise, JSON, Math, Object, Array, String, Number, Boolean,
     Error, RegExp, isNaN, parseInt, parseFloat, Set, Map,
+    // A vm context only gets ECMAScript intrinsics, so the host objects the
+    // worker relies on have to be handed in. The tracker parses the active
+    // tab's host with URL.
+    URL,
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);

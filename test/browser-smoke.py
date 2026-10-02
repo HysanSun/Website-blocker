@@ -22,8 +22,10 @@ Run:
 
 Extensions need a headed browser, so this opens a real Chromium window.
 """
+import http.server
 import os
 import sys
+import threading
 import time
 
 try:
@@ -37,6 +39,33 @@ PROFILE = os.path.join(os.environ.get("TEMP", "/tmp"), "blocker-smoke-%d" % time
 
 results = []
 
+MARKER = b"<html><body>marker page</body></html>"
+
+
+class MarkerServer(http.server.BaseHTTPRequestHandler):
+    """Answers every request with a page the checks can recognise."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(MARKER)))
+        self.end_headers()
+        self.wfile.write(MARKER)
+
+    def log_message(self, *args):
+        pass
+
+
+# The hosts the extent checks use. The browser resolves them to the marker
+# server instead of the network, so "this host is still reachable" can be
+# asserted by finding the marker - "it did not land on blockpage.html" would
+# also pass on a DNS failure. `*.invalid` can never resolve for real.
+MARKER_HOSTS = [
+    "testsite.invalid", "www.testsite.invalid", "mail.testsite.invalid",
+    "pan.testsite.invalid", "a.pan.testsite.invalid", "nottestsite.invalid",
+    "testsite.invalid.evil.invalid",
+]
+
 
 def check(name, ok, detail=""):
     results.append(ok)
@@ -45,11 +74,17 @@ def check(name, ok, detail=""):
 
 def main():
     print("extension:", EXT)
+    marker = http.server.ThreadingHTTPServer(("127.0.0.1", 0), MarkerServer)
+    port = marker.server_address[1]
+    threading.Thread(target=marker.serve_forever, daemon=True).start()
+    resolver = ",".join("MAP %s 127.0.0.1:%d" % (h, port) for h in MARKER_HOSTS)
+    print("marker server: 127.0.0.1:%d" % port)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             user_data_dir=PROFILE,
             headless=False,  # extensions are unsupported in the headless shell
-            args=["--disable-extensions-except=" + EXT, "--load-extension=" + EXT],
+            args=["--disable-extensions-except=" + EXT, "--load-extension=" + EXT,
+                  "--host-resolver-rules=" + resolver],
         )
         try:
             sw = None
@@ -322,12 +357,65 @@ def main():
                   and "Timer settings" in manual and "Skip" in manual,
                   "%d chars" % len(manual))
 
+            # 9. How wide a rule is. A value covers its host and every subdomain
+            # of it and nothing else, and a '!host' rule opens a hole in a wider
+            # block - which is the baidu.com / pan.baidu.com complaint: blocking
+            # baidu.com used to close pan.baidu.com with no way back.
+            page2.evaluate("""() => new Promise(res => chrome.runtime.sendMessage(
+                {action:'saveRules', rules:[
+                    {val:'testsite.invalid', type:'block', mode:'website'},
+                    {val:'!pan.testsite.invalid', type:'block', mode:'website'}]}, res))""")
+            page2.wait_for_timeout(1200)
+            rules9 = sw.evaluate("async () => JSON.stringify(await chrome.declarativeNetRequest.getDynamicRules())")
+            check("a website rule asks for its host and its subdomains",
+                  '"||testsite.invalid^"' in rules9, rules9[:200])
+            check("a '!' rule becomes an allow rule for its own host",
+                  '"||pan.testsite.invalid^"' in rules9 and '"allow"' in rules9, rules9[:240])
+
+            # The DNR layer on its own, which is the half content.js cannot save:
+            # the old `*://*.host/*` filter never matched the bare host.
+            apex = sw.evaluate("""async () => {
+                try {
+                    const r = await chrome.declarativeNetRequest.testMatchOutcome(
+                        {url: 'http://testsite.invalid/', type: 'main_frame'});
+                    return JSON.stringify(r.matchedRules.map(m => m.ruleId));
+                } catch (e) { return 'unavailable: ' + e.message; }
+            }""")
+            check("declarativeNetRequest itself covers the bare host",
+                  apex.startswith('[') and apex != '[]', apex)
+
+            def visit(url):
+                t = ctx.new_page()
+                try:
+                    t.goto(url, wait_until="domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
+                t.wait_for_timeout(900)
+                on_block_page = "blockpage.html" in t.url
+                shows_marker = (not on_block_page) and ("marker page" in t.content())
+                t.close()
+                return on_block_page, shows_marker
+
+            for host, want_blocked in [
+                    ("testsite.invalid", True), ("www.testsite.invalid", True),
+                    ("mail.testsite.invalid", True),
+                    ("pan.testsite.invalid", False), ("a.pan.testsite.invalid", False),
+                    ("nottestsite.invalid", False),
+                    ("testsite.invalid.evil.invalid", False)]:
+                blocked, marked = visit("http://%s/" % host)
+                if want_blocked:
+                    check("blocked: %s" % host, blocked, "landed on %s" % blocked)
+                else:
+                    check("stays reachable: %s" % host, marked,
+                          "blocked=%s marker=%s" % (blocked, marked))
+
             # Give any tab/alarm-driven rule sync a chance to blow up.
             entry.wait_for_timeout(2000)
             check("no service-worker console errors", not sw_errors, str(sw_errors[:3]))
             check("no uncaught page errors", not errors, str(errors))
         finally:
             ctx.close()
+            marker.shutdown()
 
     passed = sum(1 for r in results if r)
     print("\n==== %d/%d checks passed ====" % (passed, len(results)))
