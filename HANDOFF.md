@@ -637,3 +637,20 @@ DNS 解析失败也会算通过。它先用 `testMatchOutcome` 单独问 DNR「�
 - 通知图标用 `icon128.png`（方图）；`icon.png` 是 470×320 的横版字标，只做页面展示。
 - `docs/legacy/` 放历史备份，`docs/README.md` 说明 `docs/` 不随扩展发布。
 - 版本只写在 `manifest.json` 一处，页面角标读 `chrome.runtime.getManifest().version`。
+
+### 9.6 旧 worker 陷阱（2026-10-02 实测踩到，代价是用户几小时的困惑）
+
+- **改磁盘上的文件不会换掉正在跑的 service worker。** 未打包扩展要在
+  `chrome://extensions` 点 Reload 才会重新注册 worker；而页面（`settings.html` 等）
+  下一次打开时**读的是磁盘上的新代码**。于是会出现「新页面 + 旧 worker」的混合体。
+- 症状：页面有 Unlock 按钮（新代码），点下去却弹 `Could not unlock` —— 旧 worker 的
+  `onMessage` 落进 `default:` 分支，回 `{success:false, error:'Unknown action'}`。
+  **这不是规则问题，也不是这个功能的 bug**，重载扩展即可。
+- 判定方法：`User Data/<profile>/Secure Preferences` 里
+  `extensions.settings.<id>.service_worker_registration_info.version` 是 worker 的版本，
+  `last_update_time` 是上次 Reload 的时刻，和 `manifest.json` 对不上就是 worker 旧了。
+  另一个指纹：`Local Extension Settings/<id>/` 里找不到 `usageClock` / `tempUnlocks` /
+  `stats` 这些只有新代码才会写的键。
+- 因此 `default:` 分支会把动作名回给页面（`unknownAction`），`settings.js` 的
+  `staleWorker()` 据此把提示换成「Reload the extension at chrome://extensions」。
+  冒烟测试有一条守着这个契约。
