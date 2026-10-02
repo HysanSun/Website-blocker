@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  harness:
+    name: state machine + streak
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: service worker syntax
+        run: node --check background.js
+
+      - name: pomodoro + blocker harness (P1-P37)
+        run: node test/pomodoro-harness.js background.js
+
+      - name: streak harness (S1-S10)
+        run: node test/streak-harness.js background.js streaks.js
+
+  browser:
+    name: real Chromium smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: install playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      # Chrome will not load an extension into a headless browser, so the smoke
+      # test opens a real window on a virtual display.
+      - name: smoke test
+        run: xvfb-run -a python test/browser-smoke.py

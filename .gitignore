@@ -1,0 +1,20 @@
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Local scratch
+node_modules/
+__pycache__/
+*.pyc
+*.log
+
+# Packaged builds and the key you sign them with - never commit these
+*.zip
+*.crx
+*.pem

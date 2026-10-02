@@ -11,7 +11,9 @@
 一个 Chrome Manifest V3 扩展，单人自用的「严格自律」工具：把指定网站/关键词彻底
 拦死，可选给某些站点设每日使用时长上限，并维护一个连续坚持天数（streak）计数。
 
-- 作者：Hysan Sun，个人项目（不是团队项目，没有 CI、没有 issue tracker）
+- 作者：Hysan Sun。个人项目，没有 issue tracker，也不接受外部 PR 的节奏要求
+- CI：`.github/workflows/tests.yml`（GitHub Actions），push / PR 时跑两套 harness +
+  `xvfb-run` 下的真浏览器冒烟测试。本地跑法见 README「Development」
 - 用户沟通语言：中文
 - 目录：`D:\软件项目\Blocker`
 
