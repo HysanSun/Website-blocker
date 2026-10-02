@@ -59,11 +59,16 @@ popup 右键「检查」；`chrome://extensions` 页面本身的报错容易漏�
 | `pomodoro.html` | 番茄钟 + Todo 的独立窗口页（计时器 / 任务 / 番茄钟设置都在这） | 是（新页面） |
 | `pomodoro.js` | `pomodoro.html` 的 UI 逻辑 | 否 |
 | `pomodoro-entry.js` | 跑在 `blockpage.html` 上的两个入口：顶栏 ⏱、被拦整页状态行 | 半 |
-| `manifest.json` | MV3 清单 | 否 |
+| `manifest.json` | MV3 清单（名称/简介/快捷键走 `_locales/` 的 `__MSG_*__`） | 否 |
+| `ui.js` / `ui.css` | 三个页面共用的反馈层（`WB.toast` / `WB.ok` / `WB.error` / `WB.armButton`） | 半 |
+| `offscreen.html` / `offscreen.js` | 只负责响一声的隐藏页（service worker 不能放音频） | 否 |
+| `PRIVACY.md` | 隐私声明（数据在哪、权限为什么、怎么删） | — |
+| `_locales/` | 扩展名与简介的翻译（en / zh_CN） | — |
+| `docs/` | 开发文档，**不随扩展发布**（`docs/legacy/` 放历史备份） | — |
 | `test/streak-harness.js` | streak 逻辑的验证 harness（见第 5 节） | 否 |
 | `test/pomodoro-harness.js` | 番茄钟 + Todo 的验证 harness（见第 5 节） | 否 |
 | `test/browser-smoke.py` | 真浏览器冒烟测试：真的把扩展装进 Chromium（见第 5 节） | 否 |
-| `streaks-back.js`、`manifest-back.json`、`maniback up.json` | 历史遗留备份，**已不参与运行** | — |
+| `docs/legacy/` | `streaks-back.js`、`manifest-back.json`、`maniback up.json`、`POMODORO-PLAN.md` 四个历史备份，**已不参与运行** | — |
 
 **`blockpage.html` 一个文件两种形态**：靠 `@media (min-width: 400px)` 切换 ——
 popup 宽度 350px 走窄版，被重定向到整页时（宽度 > 400px）走卡片版并显示被拦提示。
@@ -344,13 +349,28 @@ DNS 解析失败也会算通过。它先用 `testMatchOutcome` 单独问 DNR「�
 | `4b94bb4` | docs：把暂停规则与冒烟测试的网络依赖写进本文件 |
 | `683eca1` | 规则宽度：`||host^`（裸域名也封、止步于主机边界）+ `!host` 例外；`hostMatches()` 三处统一（第 3 节 / 8.4） |
 | `ce41125` | test：P27/P28 + 冒烟测试第 9 组（本地 marker 服务器 + `--host-resolver-rules`），含两条对照 |
-| 本轮 docs | 上面两条的做法、对照与计数写进本文件（第 3 节 / 第 5 节 / 8.4） |
+| `4b94bb4`、`683eca1`、`ce41125`、`e4b117b` | 规则宽度 / 例外语义 / 对照测试，做法写进第 3 节 |
+| `44533e0` | docs：`PRODUCT-REVIEW.md`（产品评审 + 四档线路图），§6 是「做完」的定义 |
+| `d8392b3` | **档位 ①-1**：配额按「经过的时间」结算（`usageClock`），补 P29–P31 |
+| `7bc7af0` | **档位 ①-2..9**：一套反馈层（`ui.js`）、AA 对比度配色、顶栏进页面顶部、`Close this tab`、真通知、streak 重置挪进设置页、规则可编辑 + 例外徽章、方形图标 |
+| `8a4ddea` | **档位 ②**：时段规则、临时放行、快捷键、提醒音、导出/导入；补 P32–P35 |
+| `351f09c` | **档位 ③**：90 天本地趋势 + 7 天回顾；补 P36/P37 |
+| `9ec0ded` | **档位 ④**：`_locales` + `PRIVACY.md` + 仓库卫生（`docs/legacy/`），版本 `2.1.0` |
 
 ### 已确认未做的事
 
-- **streak 那次的改动前端一行未动**：全在 `background.js`。番茄钟那次（第 8 节）对
-  `blockpage.html` 只有两处增量：顶栏加一个 ⏱ 图标、被拦整页加一行状态行。
-  `streaks.js`、`settings.html`、`settings.js` 至今仍是原样（用户要求不改变原有布局）。
+- **streak 那次的改动前端一行未动**：全在 `background.js`。
+- **档位 ① 之后，`streaks.js` / `settings.html` / `settings.js` 不再是「一行未动」**，
+  这一点必须说实话：
+  - `settings.html` / `settings.js` 在档位 ① 里按评审 BUG-3 / BUG-7 重写（例外徽章、
+    编辑态、Reset 挪进来）；档位 ② 又加了「时段」控件和每行的 `Unlock` 按钮。
+    规则行从「2 个按钮」变成「3 个按钮」，所以多了一个 `.rule-actions` 分组：一行放不下时
+    三个按钮整体换到第二行右对齐，而不是散开。**这是本次唯一改到既有卡片观感的地方。**
+  - `blockpage.html` 在档位 ①/② 里多了 `Close this tab`、整页 `Unlock` 行；
+    顶栏仍只有 ⏱ 和 ⚙ 两个图标。
+  - 用户的原话是「不要改变原有界面的前端布局」；档位 ① 是用户点名要做的，档位 ②③ 只新增
+    控件/卡片，没有挪动既有卡片顺序。`pomodoro.html` 的 Trend 卡插在 Done 与 Timer settings
+    之间，是唯一新增的卡片。
 - `streaks.js` 的 `resetStreak()` 没有清 `needsAlert`，也没记 `hadHostAccess`。
   不影响正确性（后台每次启动都会重算），但如果以后 popup 要展示更细的状态，
   从这里入手。
@@ -375,9 +395,13 @@ DNS 解析失败也会算通过。它先用 `testMatchOutcome` 单独问 DNR「�
 
 - 用第 6 节的思路给「权限撤销」加即时检测（需先解决限制 1 的验证问题）
 - 给 DNR 的实际拦截效果 / 时长统计补自动化测试（规则集合已有 harness 覆盖，端到端仍无覆盖）
-- ~~统一 `1.7.2` vs `v2.0` 的版本号表述~~ —— 已完成，统一为 `2.0.0`
-- 清理 `streaks-back.js` / `manifest-back.json` / `maniback up.json` 三个历史备份
-  （**先问用户**，它们可能有留存意图）
+- ~~统一 `1.7.2` vs `v2.0` 的版本号表述~~ —— 已完成，页面角标改读 `getManifest().version`
+- ~~清理 `streaks-back.js` / `manifest-back.json` / `maniback up.json` 三个历史备份~~
+  —— 已完成（档位 ④），连同 `POMODORO-PLAN.md` 一起移进 `docs/legacy/`，没有删除
+- **页面级 i18n**：`_locales/` 只覆盖了 manifest 的扩展名 / 简介 / 快捷键说明。
+  三个页面的正文仍是「英文界面 + 中文 Manual」，要不要整体翻译请先问用户
+- **任务跨设备同步**：只有任务文本适合进 `storage.sync`。没做，因为收益（备份文件已经能
+  搬家）小于风险（`todo` 是本地的单一权威，改成同步要处理冲突）。要做请先想清楚合并规则
 
 ## 8. 番茄钟 & Todo（独立窗口版）
 
@@ -400,9 +424,11 @@ DNS 解析失败也会算通过。它先用 `testMatchOutcome` 单独问 DNR「�
 
 | 键 | 区域 | 含义 |
 |---|---|---|
-| `pomodoro` | local | 运行态：`phase` / `endAt` / `pausedRemainingMs` / `cycleDone` / `dayKey` / `focusToday` / `focusMsToday` / `taskId` / `strictNow`，外加本轮新增的 `run`（多单位承诺）与 `review`（待回答的提问） |
-| `pomodoroSettings` | sync | 配置：三段时长、长休间隔、两个自动开始开关、`focusBlocksTimed` |
+| `pomodoro` | local | 运行态：`phase` / `endAt` / `pausedRemainingMs` / `cycleDone` / `dayKey` / `focusToday` / `focusMsToday` / `taskId` / `strictNow`，外加 `run`（多单位承诺）与 `review`（待回答的提问） |
+| `pomodoroSettings` | sync | 配置：三段时长、长休间隔、两个自动开始开关、`focusBlocksTimed`、`soundOn`（默认关） |
 | `todo` | local | `{v, tasks:[{id,text,done,createdAt,doneAt,pomodoros,focusMs,plannedUnits}]}`，数组顺序即显示顺序；`plannedUnits` = 预计单位数（0 = 未估），`pomodoros` = 已记单位数 |
+| `tempUnlocks` | local | `{host: until}`：临时放行的到期时间。**只在 local**，且读取时永远按 `until > now` 过滤 |
+| `stats` | local | `{v, days:{'YYYY-MM-DD':{focusMs, sessions, blocks:{host:n}}}}`，保留 90 天。**绝不能搬进 sync**（8KB/项、100KB 总量、1800 写/小时） |
 
 ### 8.3 计时机制
 
@@ -532,3 +558,77 @@ DNS 解析失败也会算通过。它先用 `testMatchOutcome` 单独问 DNR「�
    用户报的「完全无法计时」= 4 号坑（worker 启动即崩）+ 这个坑叠加。现在 `wantedIds` /
    `liveIds` / `items` 三个诊断变量都在 `try` 外面声明。P19 守着这条：它不仅断言规则集不被
    清空，还断言规则写失败时 `syncRules` 仍然要回 `{success:true}`。
+
+## 9. 档位 ②③④（时段 / 临时放行 / 快捷键 / 声音 / 备份 / 趋势 / 产品化）
+
+### 9.1 时段规则（`blockedItems[i].window`）
+
+`window: { days:[0..6]（0=周日）, from:'HH:MM', to:'HH:MM' }`，可选。
+
+- **窗口之外这条规则不存在**，不是「放宽」：`syncAllRulesNow()` 直接 `continue`，
+  `timedRuleForHost()` / `content.js` / 设置页灰显都照同一条语义。timed 规则在窗口外
+  **不计额度**。
+- `to <= from` 表示跨午夜（如 22:00–06:00），**午夜之后那一段算在起始日**：
+  `belongsTo = (crossesMidnight && nowMin < to) ? (day+6)%7 : day`。
+  这是最容易写错的地方，P33 用三个固定时刻 + 不同 `days` 守住它。
+- 读不出来的窗口（`from`/`to` 解析失败）**按「生效」处理** —— 静默失效比误封危险。
+- **一个写手**:`windowSignatureOf()` 只生成一串 `'0'/'1'`，`syncAllRulesNow()` 记进
+  `lastWindowSignature`，`trackActiveTab()` 发现签名变了才 `syncAllRules()`。
+  所以窗口开关不是在整点自动生效的，而是**下一次 per-minute tick**（最多晚 1 分钟），
+  这也意味着 `trackActiveTab()` 里那段签名判断**必须在 `tab && tab.url` 分支里** ——
+  P32 一开始就是因为它没焦点标签页而失败。
+- 设置页为了灰显复制了一份 12 行的 `isWindowActive()`。**它只影响一层灰色**，
+  判定权威始终是 background；两处漂移的后果仅限于颜色。
+
+### 9.2 临时放行（`tempUnlocks`）
+
+- 机制就是**例外规则的同一套 allow 规则**，额外带一个到期时间。优先级 100，id 段
+  `TEMP_UNLOCK_ID_OFFSET = 3000000`（在所有其他段之上，任何按低段过滤的逻辑都扫不到它）。
+  段位梯子：`1..N` 完整 block、`1000000+` 例外、`1500000+` 专注期 timed、`2000000+`
+  超额 timed、`3000000+` 临时放行。
+- `expireTempUnlocks()` 按 `until > now` 过滤并写回，`armTempUnlockAlarm()` 把 alarm 挂在
+  **最早到期**的那个上。**`initialize()` 里必须重新 arm**：解锁状态活得比 worker 久。
+  （这条曾经漏过 —— 只挂 alarm 不重新 arm，重启后没人收回它。）
+- `minutes === 0` 表示「现在锁回去」，调用方不用再来一条消息。
+- 拦截页怎么知道该放行谁：DNR 重定向的 `extensionPath` 带 `?host=<rule.val>`，
+  `redirectActiveTabAway()` 和 `content.js` 还多带一个 `?url=` 用来回到原来那一页。
+  **query string 在 `extensionPath` 里是合法的**（Chromium 实测：存进去是什么样，跳过去就是
+  什么样），这是拦截页唯一能拿到的「是谁拦的我」。
+- 有意为之：**专注期也能按临时放行**。`!host` 例外本来就能穿过专注期拦截，
+  临时放行是同一个东西；「删扩展」不该是唯一出口。说明书里明说了这一点。
+
+### 9.3 快捷键、提醒音、备份
+
+- `commands`：`Alt+Shift+P` 开窗口、`Alt+Shift+S` 暂停/继续。`background.js` 里注册前先判
+  `chrome.commands && chrome.commands.onCommand`（harness 里没有这个命名空间）。
+  **`togglePomodoroTimer()` 不能绕过「一次专注只准暂停一次」** —— 它只调
+  `pomodoroPause()`，让 worker 自己拒绝第二次。P5 的语义不许被快捷键旁路。
+- 提醒音：service worker 放不了声音，所以有一个 `offscreen.html` + `offscreen.js`，
+  用 WebAudio **现场合成两个音**（不下载任何音频文件，隐私声明里承诺了这一点）。
+  **默认关**（`soundOn:false`），只有在设置里勾了才播。`playPhaseSound()` 不 await。
+- 导出/导入在设置页：导出 `storage.local` + `storage.sync` 的全量 JSON；导入**整体替换**，
+  导入后要 `syncRules` 让 DNR 跟上。这是对「删扩展 = 唯一解锁」的对冲。
+
+### 9.4 趋势（`stats`）
+
+- 记两个点：专注**完成**时（`pomodoroEnterNextPhase` 的 credit 分支）记 `focusMs/sessions`；
+  额度**刚被跨过**时（`trackActiveTab` 里 `prevMs < limitMs && newMs >= limitMs`）记一次
+  `blocks[host]`。**一次跨越一次**，不是每分钟一次（P37）。
+- **绝不允许写进 `storage.sync`**。它的量按分钟增长，而 sync 有每项 8KB / 总量 100KB /
+  每小时 1800 次写的配额，写爆会连用户的规则设置一起丢。
+- 写入点全部包在 try/catch 里：**统计是记录，不是规则**，写失败不能影响记账或相位推进。
+- `pruneStats()` 在每次写时按 `'YYYY-MM-DD'` 字符串比较裁掉 90 天前（P36 用一条
+  `2000-01-01` 的记录守这条）。
+- UI 是 `pomodoro.html` 里插在 Done 与 Timer settings 之间的折叠卡：7 根柱子 +
+  「Last 7 days: N sessions · Xh Ym」+ 「在哪跑完额度最多」。
+
+### 9.5 产品化（档位 ④）
+
+- `_locales/en` + `_locales/zh_CN`，`default_locale: "en"`，manifest 里
+  `name/description/commands[].description/action.default_title` 用 `__MSG_*__`。
+  **缺 key 会让扩展整个装不上**，改完必须跑一次冒烟测试（它会真的加载扩展并打印版本）。
+- `PRIVACY.md` 是完整声明；`pomodoro.html` 的 Manual 里有一节说同样的话。
+  里面的「不联网」是可验证的事实，不是口号：`grep -n "fetch(\|XMLHttpRequest\|sendBeacon\|WebSocket"`。
+- 通知图标用 `icon128.png`（方图）；`icon.png` 是 470×320 的横版字标，只做页面展示。
+- `docs/legacy/` 放历史备份，`docs/README.md` 说明 `docs/` 不随扩展发布。
+- 版本只写在 `manifest.json` 一处，页面角标读 `chrome.runtime.getManifest().version`。
