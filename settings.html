@@ -288,6 +288,121 @@
         }
         .cancel-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
 
+        /* --- Time window + temporary unlock (tier 2) --- */
+        .check-inline {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+        #window-group {
+            border-left: 3px solid var(--border-color);
+            padding-left: 12px;
+            margin-bottom: 10px;
+        }
+        #window-days {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+        .day-check {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 30px;
+            border: 1px solid #ddd;
+            border-radius: var(--radius-sm);
+            font-size: 0.68rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            user-select: none;
+            background: white;
+        }
+        .day-check input { display: none; }
+        .day-check.on {
+            border-color: var(--accent-color);
+            background: #fef3e4;
+            color: var(--accent-color);
+        }
+        #window-times {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 0;
+        }
+        #window-times label { font-size: 0.78rem; color: var(--text-muted); }
+        #window-times input {
+            padding: 7px 8px;
+            border: 1px solid #ddd;
+            border-radius: var(--radius-sm);
+            font-size: 0.8rem;
+        }
+        .rule-window {
+            width: 100%;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .rule-item.is-off { opacity: 0.55; }
+        .rule-unlock-btn {
+            padding: 4px 12px;
+            border: 1px solid var(--success-color);
+            border-radius: var(--radius-sm);
+            background: white;
+            color: var(--success-color);
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .rule-unlock-btn:hover { background: var(--success-color); color: white; }
+        #unlock-list { margin-bottom: 10px; }
+        #unlock-list:empty { display: none; }
+        .unlock-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            margin-bottom: 6px;
+            border-radius: var(--radius-sm);
+            background: #e7f6ec;
+            font-size: 0.76rem;
+            color: var(--success-color);
+        }
+        .unlock-item .unlock-host { font-weight: 600; flex: 1; word-break: break-all; }
+        .unlock-item button {
+            border: none;
+            background: none;
+            color: var(--success-color);
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: underline;
+            flex-shrink: 0;
+        }
+
+        /* --- Backup --- */
+        #backup-buttons { display: flex; gap: 8px; }
+        .ghost-btn {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: var(--radius-sm);
+            background: white;
+            color: var(--primary-color);
+            font-weight: 600;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .ghost-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
+
         /* The toast itself lives in ui.css, shared with the popup and the
            pomodoro window. */
     </style>
@@ -303,6 +418,7 @@
         <!-- Block Rules List -->
         <div class="card">
             <h2>Your Rules</h2>
+            <div id="unlock-list"></div>
             <div id="rules-list">
                 <div class="empty-state">
                     <div class="icon">&#128683;</div>
@@ -326,6 +442,21 @@
                 <input type="number" id="limit-input" value="30" min="1" max="1440">
                 <label for="limit-input">min</label>
             </div>
+            <div class="form-row" style="margin-bottom:10px;">
+                <label class="check-inline" for="window-toggle">
+                    <input type="checkbox" id="window-toggle">
+                    Only during certain hours
+                </label>
+            </div>
+            <div id="window-group" hidden>
+                <div id="window-days"></div>
+                <div class="form-row" id="window-times">
+                    <label for="window-from">From</label>
+                    <input type="time" id="window-from" value="09:00">
+                    <label for="window-to">To</label>
+                    <input type="time" id="window-to" value="17:00">
+                </div>
+            </div>
             <div id="rule-buttons">
                 <button id="add-rule-btn">Add Rule</button>
                 <button id="cancel-edit-btn" class="cancel-btn" hidden>Cancel</button>
@@ -337,6 +468,18 @@
             <h2>Focus streak</h2>
             <p class="card-note" id="streak-note"></p>
             <button id="reset-btn" class="danger-btn">Reset streak to 0</button>
+        </div>
+
+        <!-- Backup -->
+        <div class="card">
+            <h2>Backup</h2>
+            <p class="card-note">Everything lives in this browser, and reinstalling
+            the extension clears it. Export before you do that, import after.</p>
+            <div id="backup-buttons">
+                <button id="export-btn" class="ghost-btn">Export data</button>
+                <button id="import-btn" class="ghost-btn">Import data</button>
+            </div>
+            <input type="file" id="import-file" accept="application/json,.json" hidden>
         </div>
     </div>
 

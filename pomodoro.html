@@ -414,6 +414,7 @@
                 <label class="check"><input type="checkbox" id="s-autobreak"> Start breaks automatically</label>
                 <label class="check"><input type="checkbox" id="s-autofocus"> Start the next focus automatically</label>
                 <label class="check"><input type="checkbox" id="s-strict"> Block timed sites during focus</label>
+                <label class="check"><input type="checkbox" id="s-sound"> Play a chime when a phase ends</label>
             </div>
             <button id="save-settings">Save settings</button>
             <p class="hint">Changes apply from the next session. A running timer keeps the deadline it started with.</p>
@@ -467,6 +468,29 @@
                     <code>!pan.baidu.com</code>（<code>!</code> 开头的规则 = 这个站和它下面的子站永远不封）。<code>baidu.com</code>
                     本身和其余子站照旧被封，别的规则不用加。</li>
                 <li>专注期被拦下来的标签页<b>不会自己跳回来</b>，刷新一下即可。</li>
+            </ul>
+
+            <h3>时段与临时放行</h3>
+            <ul>
+                <li>设置里每条规则可以勾 <b>Only during certain hours</b>。窗口之外这条规则
+                    <b>不存在</b> —— 不是放宽，是"这一小时没有这条规则"，timed 规则的额度也不计。
+                    跨午夜的窗口（例如 22:00&#8211;06:00）算在它开始的那一天。</li>
+                <li>被拦的整页上有一个 <b>Unlock 30 min</b>：它写一条带过期时间的放行规则，到点自己收回，
+                    列表顶部和设置页都会显示还剩多久。它和 <code>!host</code> 例外是<b>同一套机制</b>
+                    （同一个 allow 规则，只是多了倒计时），不是第二种例外。专注期也按得动它 ——
+                    这一点是有意的：临时的、你自己按的放行，比"删扩展"体面。</li>
+                <li>放行只按域名生效：<code>pan.baidu.com</code> 的放行不会连带放开 <code>baidu.com</code>。</li>
+            </ul>
+
+            <h3>快捷键、提醒音与备份</h3>
+            <ul>
+                <li><b>Alt+Shift+P</b> 打开这个窗口，<b>Alt+Shift+S</b> 暂停 / 继续当前计时。
+                    快捷键绕不过"一次专注只能暂停一次"这条规则；想改键去
+                    <code>chrome://extensions/shortcuts</code>。</li>
+                <li><b>Play a chime when a phase ends</b>（默认关）：相位结束时响一声。声音是本地合成的，
+                    不联网、不下载音频文件。关着就完全不出声。</li>
+                <li>设置页的 <b>Backup</b> 把规则、任务、统计、番茄钟设置一起导出成一个 JSON；
+                    导入是<b>整体替换</b>，不是合并。防的是"删扩展 = 唯一解锁"那一天。</li>
             </ul>
 
             <h3>数据与统计</h3>

@@ -45,6 +45,7 @@
         .blocked-title { display: none; }
         .pomodoro-line { display: none; }
         .leave-btn { display: none; }
+        .unlock-row { display: none; }
 
         /* ============================================
            FULL-PAGE MODE (blocked site redirect)
@@ -101,6 +102,32 @@
                 cursor: pointer;
             }
             .leave-btn:hover { opacity: 0.8; }
+
+            /* The one thing a blocked page owes you besides a way out: a timed,
+               deliberate way back in. Full-page form only - the popup has no
+               room for a second decision. */
+            .unlock-row:not([hidden]) {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex-wrap: wrap;
+                margin: 0 0 4px;
+            }
+            .unlock-btn {
+                padding: 7px 12px;
+                border: 1px solid var(--success-color);
+                border-radius: var(--radius-sm);
+                background: white;
+                color: var(--success-color);
+                font-family: inherit;
+                font-size: 0.76rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+            .unlock-btn:hover { background: var(--success-color); color: white; }
+            .unlock-btn[disabled] { opacity: 0.5; cursor: default; }
+            .unlock-note { font-size: 0.7rem; color: var(--text-muted); }
         }
 
         /* --- Top Bar --- */
@@ -314,6 +341,10 @@
     <div id="pomodoro-line" class="pomodoro-line"></div>
     <p class="blocked-title">This site has been blocked to keep you focused.</p>
     <button id="leave-btn" class="leave-btn">Close this tab</button>
+    <div id="unlock-row" class="unlock-row" hidden>
+        <button id="unlock-btn" class="unlock-btn">Unlock 30 min</button>
+        <span id="unlock-note" class="unlock-note"></span>
+    </div>
 
     <!-- Manual -->
     <div id="manual-window">
@@ -321,7 +352,7 @@
         <p style="font-size:0.78rem;color:var(--text-muted);margin:4px 0;"><strong>Website:</strong> Type 'ghcis.com' to lock.</p>
         <p style="font-size:0.78rem;color:var(--text-muted);margin:4px 0;"><strong>Keyword:</strong> Type 'school' to block searches.</p>
         <p style="font-size:0.78rem;color:var(--text-muted);margin:4px 0;"><strong>Timed:</strong> Click &#9881; to set daily time limits.</p>
-        <p style="font-size:0.78rem;color:var(--text-muted);margin:4px 0;"><strong>Warning:</strong> Cannot be unlocked unless you delete the extension.</p>
+        <p style="font-size:0.78rem;color:var(--text-muted);margin:4px 0;"><strong>Escape hatch:</strong> A blocked page offers "Unlock 30 min" &mdash; the same allow rule as a '!' exception, with an expiry. Otherwise the only unlock is deleting the extension.</p>
         <p style="font-size:0.68rem;color:var(--text-muted);margin-top:12px;">(Click outside to close)</p>
     </div>
     <a href="#" class="backdrop"></a>

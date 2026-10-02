@@ -12,6 +12,124 @@ const addRuleBtn = document.getElementById('add-rule-btn');
 const cancelEditBtn = document.getElementById('cancel-edit-btn');
 const resetStreakBtn = document.getElementById('reset-btn');
 const streakNote = document.getElementById('streak-note');
+const exportDataBtn = document.getElementById('export-btn');
+const importDataBtn = document.getElementById('import-btn');
+const importFile = document.getElementById('import-file');
+const windowToggle = document.getElementById('window-toggle');
+const windowGroup = document.getElementById('window-group');
+const windowDays = document.getElementById('window-days');
+const windowFrom = document.getElementById('window-from');
+const windowTo = document.getElementById('window-to');
+const unlockList = document.getElementById('unlock-list');
+
+// Day picker for a rule's optional time window. Mirrors the rule window in
+// background.js (`ruleWindowActive`), where 0 is Sunday.
+var TEMP_UNLOCK_MIN = 30;
+var DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+var DEFAULT_DAYS = [1, 2, 3, 4, 5];
+
+DAY_LABELS.forEach(function (label, index) {
+    var wrap = document.createElement('label');
+    wrap.className = 'day-check';
+    wrap.setAttribute('data-day', String(index));
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = String(index);
+    wrap.appendChild(box);
+    wrap.appendChild(document.createTextNode(label));
+    wrap.addEventListener('click', function () { setTimeout(paintDays, 0); });
+    windowDays.appendChild(wrap);
+});
+
+function paintDays() {
+    var boxes = windowDays.querySelectorAll('input');
+    for (var i = 0; i < boxes.length; i++) {
+        boxes[i].parentNode.className = 'day-check' + (boxes[i].checked ? ' on' : '');
+    }
+}
+
+function selectedDays() {
+    var out = [];
+    var boxes = windowDays.querySelectorAll('input');
+    for (var i = 0; i < boxes.length; i++) { if (boxes[i].checked) out.push(Number(boxes[i].value)); }
+    return out;
+}
+
+function setDays(days) {
+    var want = (days && days.length) ? days : DEFAULT_DAYS;
+    var boxes = windowDays.querySelectorAll('input');
+    for (var i = 0; i < boxes.length; i++) {
+        boxes[i].checked = want.indexOf(Number(boxes[i].value)) !== -1;
+    }
+    paintDays();
+}
+
+// Readable form of a rule's window, or '' when it has none.
+function windowText(win) {
+    if (!win || typeof win !== 'object') return '';
+    var from = win.from || '';
+    var to = win.to || '';
+    if (!from || !to) return '';
+    var days = (win.days && win.days.length) ? win.days.slice().sort() : null;
+    var dayText = 'Every day';
+    if (days && days.length === 7) dayText = 'Every day';
+    else if (days) {
+        dayText = days.map(function (d) { return DAY_LABELS[d] || '?'; }).join(' ');
+    }
+    return dayText + ' ' + from + '\u2013' + to;
+}
+
+// Mirrors ruleWindowActive() in background.js. A wrong grey tint is the worst
+// thing that happens if the two ever drift; enforcement is decided by the
+// worker, not here.
+function isWindowActive(rule) {
+    var win = rule && rule.window;
+    if (!win || typeof win !== 'object') return true;
+    var from = parseClock(win.from);
+    var to = parseClock(win.to);
+    if (from === null || to === null) return true;
+    var now = new Date();
+    var nowMin = now.getHours() * 60 + now.getMinutes();
+    var crosses = from > to;
+    var inRange = crosses ? (nowMin >= from || nowMin < to) : (nowMin >= from && nowMin < to);
+    var days = (win.days && win.days.length) ? win.days : null;
+    if (!days) return inRange;
+    var day = now.getDay();
+    var belongsTo = (crosses && nowMin < to) ? (day + 6) % 7 : day;
+    return inRange && days.indexOf(belongsTo) !== -1;
+}
+
+function parseClock(text) {
+    var m = /^(\d{1,2}):(\d{2})$/.exec(String(text == null ? '' : text).trim());
+    if (!m) return null;
+    var h = Number(m[1]);
+    var mm = Number(m[2]);
+    if (h > 23 || mm > 59) return null;
+    return h * 60 + mm;
+}
+
+function readWindowFromForm() {
+    if (!windowToggle.checked) return null;
+    var days = selectedDays();
+    return {
+        days: days.length ? days : DEFAULT_DAYS.slice(),
+        from: windowFrom.value || '09:00',
+        to: windowTo.value || '17:00'
+    };
+}
+
+function setWindowInForm(win) {
+    var on = !!(win && typeof win === 'object');
+    windowToggle.checked = on;
+    windowGroup.hidden = !on;
+    setDays(on ? win.days : DEFAULT_DAYS);
+    windowFrom.value = (on && win.from) || '09:00';
+    windowTo.value = (on && win.to) || '17:00';
+}
+
+windowToggle.addEventListener('change', function () {
+    windowGroup.hidden = !windowToggle.checked;
+});
 
 // The value of the rule currently loaded into the form, or null when the form
 // is adding a new one. Editing reuses the same fields instead of making the
@@ -46,8 +164,13 @@ function isExceptionVal(val) {
 // 2. FORM STATE
 // ============================================================
 function syncLimitVisibility() {
-    limitGroup.style.display = (typeSelect.value === 'timed' && !isExceptionVal(domainInput.value))
-        ? 'flex' : 'none';
+    var exception = isExceptionVal(domainInput.value);
+    limitGroup.style.display = (typeSelect.value === 'timed' && !exception) ? 'flex' : 'none';
+    // A window says when a block applies; an exception never blocks, so the
+    // whole control disappears with it.
+    var toggleRow = windowToggle.closest('.form-row');
+    if (toggleRow) toggleRow.style.display = exception ? 'none' : 'flex';
+    if (exception) { windowToggle.checked = false; windowGroup.hidden = true; }
 }
 
 typeSelect.addEventListener('change', syncLimitVisibility);
@@ -66,6 +189,7 @@ function beginEdit(val) {
         domainInput.value = rule.val;
         typeSelect.value = (rule.type === 'timed') ? 'timed' : 'block';
         limitInput.value = rule.limitMin || 30;
+        setWindowInForm(rule.window);
         syncLimitVisibility();
         addRuleBtn.textContent = 'Save changes';
         cancelEditBtn.hidden = false;
@@ -79,6 +203,7 @@ function cancelEdit() {
     domainInput.value = '';
     typeSelect.value = 'timed';
     limitInput.value = 30;
+    setWindowInForm(null);
     syncLimitVisibility();
     addRuleBtn.textContent = 'Add Rule';
     cancelEditBtn.hidden = true;
@@ -131,8 +256,10 @@ function loadAndRender() {
 
             var badgeClass = exception ? 'badge-exception' : (isTimed ? 'badge-timed' : 'badge-block');
             var badgeText = exception ? 'Exception' : (isTimed ? 'Timed' : 'Blocked');
+            var winText = windowText(rule.window);
+            var winOff = !!winText && !isWindowActive(rule);
 
-            html += '<div class="rule-item">';
+            html += '<div class="rule-item' + (winOff ? ' is-off' : '') + '">';
             html += '<span class="rule-type-badge ' + badgeClass + '">' + badgeText + '</span>';
             html += '<span class="rule-domain">' + escapeHtml(rule.val) + '</span>';
 
@@ -145,7 +272,16 @@ function loadAndRender() {
             }
 
             html += '<button class="rule-edit-btn" data-val="' + escapeHtml(rule.val) + '">Edit</button>';
+            if (!exception) {
+                html += '<button class="rule-unlock-btn" data-val="' + escapeHtml(rule.val) + '">Unlock ' +
+                    TEMP_UNLOCK_MIN + ' min</button>';
+            }
             html += '<button class="rule-delete-btn" data-val="' + escapeHtml(rule.val) + '">Remove</button>';
+
+            if (winText) {
+                html += '<div class="rule-window">' + (winOff ? 'Outside its hours — not enforced now. ' : 'During ') +
+                    escapeHtml(winText) + '</div>';
+            }
 
             if (isTimed) {
                 var barClass = 'normal';
@@ -163,10 +299,16 @@ function loadAndRender() {
         });
 
         rulesList.innerHTML = html;
+        renderUnlocks();
 
         var editBtns = document.querySelectorAll('.rule-edit-btn');
         for (var i = 0; i < editBtns.length; i++) {
             editBtns[i].addEventListener('click', function () { beginEdit(this.dataset.val); });
+        }
+
+        var unlockBtns = document.querySelectorAll('.rule-unlock-btn');
+        for (var k = 0; k < unlockBtns.length; k++) {
+            unlockBtns[k].addEventListener('click', function () { requestUnlock(this.dataset.val); });
         }
 
         var deleteBtns = document.querySelectorAll('.rule-delete-btn');
@@ -174,6 +316,56 @@ function loadAndRender() {
             deleteBtns[j].addEventListener('click', function () { deleteRule(this.dataset.val); });
         }
     }
+}
+
+// ============================================================
+// 3b. TEMPORARY UNLOCKS
+// ============================================================
+// The escape hatch that does not require deleting the extension: an allow rule
+// with an expiry, in its own rule-id band on the worker. Same mechanism as a
+// '!' exception, so there is only ever one kind of "let me through".
+function unlockLeftText(until) {
+    var left = Math.max(0, until - Date.now());
+    return Math.max(1, Math.ceil(left / 60000)) + ' min left';
+}
+
+function renderUnlocks() {
+    if (!unlockList) return;
+    chrome.runtime.sendMessage({ action: 'getTempUnlocks' }, function (res) {
+        var unlocks = (res && res.success && res.tempUnlocks) ? res.tempUnlocks : [];
+        if (!unlocks.length) { unlockList.innerHTML = ''; return; }
+        var html = '<div class="rule-limit" style="margin-bottom:6px;">Open right now</div>';
+        unlocks.sort(function (a, b) { return a.until - b.until; });
+        unlocks.forEach(function (u) {
+            html += '<div class="unlock-item">';
+            html += '<span class="unlock-host">' + escapeHtml(u.host) + '</span>';
+            html += '<span>' + unlockLeftText(u.until) + '</span>';
+            html += '<button data-val="' + escapeHtml(u.host) + '">Lock now</button>';
+            html += '</div>';
+        });
+        unlockList.innerHTML = html;
+        var btns = unlockList.querySelectorAll('button');
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].addEventListener('click', function () { revokeUnlock(this.dataset.val); });
+        }
+    });
+}
+
+function requestUnlock(val) {
+    chrome.runtime.sendMessage({ action: 'tempUnlock', val: val, minutes: TEMP_UNLOCK_MIN },
+        function (res) {
+            if (!res || !res.success) { showToast('Could not unlock ' + val, true); return; }
+            showToast('Unlocked for ' + TEMP_UNLOCK_MIN + ' min: ' + val);
+            loadAndRender();
+        });
+}
+
+function revokeUnlock(val) {
+    chrome.runtime.sendMessage({ action: 'tempUnlock', val: val, minutes: 0 }, function (res) {
+        if (!res || !res.success) { showToast('Could not lock ' + val, true); return; }
+        showToast('Locked again: ' + val);
+        loadAndRender();
+    });
 }
 
 // ============================================================
@@ -249,6 +441,8 @@ addRuleBtn.addEventListener('click', function () {
         if (!exception) {
             newRule.type = type;
             if (type === 'timed') newRule.limitMin = limitMin;
+            var win = readWindowFromForm();
+            if (win) newRule.window = win;
         }
 
         var wasEditing = editingVal;
@@ -262,6 +456,7 @@ addRuleBtn.addEventListener('click', function () {
             }
             var label = exception ? 'Exception' :
                 (type === 'timed' ? 'Timed: ' + limitMin + ' min/day' : 'Complete Block');
+            if (!exception && newRule.window) label += ', ' + windowText(newRule.window);
             showToast((wasEditing ? 'Updated: ' : 'Added: ') + cleanVal + ' (' + label + ')');
             cancelEdit();
             loadAndRender();
@@ -302,14 +497,93 @@ function resetStreak() {
 if (window.WB && resetStreakBtn) WB.armButton(resetStreakBtn, 'Click again to reset', resetStreak);
 
 // ============================================================
-// 7. BACK BUTTON
+// 7. BACKUP — export / import everything
+// ============================================================
+// The product's own rule is that the only way to unlock a blocked site is to
+// remove the extension, which also throws every rule, task and streak away.
+// This is the safety net.
+function exportData() {
+    Promise.all([
+        new Promise(function (r) { chrome.storage.sync.get(null, r); }),
+        new Promise(function (r) { chrome.storage.local.get(null, r); })
+    ]).then(function (parts) {
+        var payload = {
+            v: 1,
+            app: 'website-blocker',
+            exportedAt: new Date().toISOString(),
+            extensionVersion: chrome.runtime.getManifest().version,
+            sync: parts[0] || {},
+            local: parts[1] || {}
+        };
+        var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'website-blocker-backup.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        showToast('Exported your rules, tasks and streak');
+    });
+}
+
+function looksLikeBackup(payload) {
+    return !!(payload && typeof payload === 'object' &&
+        (payload.sync && typeof payload.sync === 'object' ||
+         payload.local && typeof payload.local === 'object'));
+}
+
+function importData(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+        var payload;
+        try {
+            payload = JSON.parse(String(reader.result));
+        } catch (e) {
+            showToast('That file is not valid JSON', true);
+            return;
+        }
+        if (!looksLikeBackup(payload)) {
+            showToast('That file is not a Website Blocker backup', true);
+            return;
+        }
+        var writes = [];
+        if (payload.sync && typeof payload.sync === 'object') {
+            writes.push(new Promise(function (r) { chrome.storage.sync.set(payload.sync, r); }));
+        }
+        if (payload.local && typeof payload.local === 'object') {
+            writes.push(new Promise(function (r) { chrome.storage.local.set(payload.local, r); }));
+        }
+        Promise.all(writes).then(function () {
+            return new Promise(function (r) { chrome.runtime.sendMessage({ action: 'syncRules' }, r); });
+        }).then(function () {
+            showToast('Imported: your rules, tasks and streak were replaced');
+            loadAndRender();
+            renderStreak();
+        });
+    };
+    reader.readAsText(file);
+}
+
+if (exportDataBtn) exportDataBtn.addEventListener('click', exportData);
+if (importDataBtn && importFile) {
+    importDataBtn.addEventListener('click', function () { importFile.click(); });
+    importFile.addEventListener('change', function () {
+        if (importFile.files && importFile.files[0]) importData(importFile.files[0]);
+        importFile.value = '';
+    });
+}
+
+// ============================================================
+// 8. BACK BUTTON
 // ============================================================
 backBtn.addEventListener('click', function () {
     window.close();
 });
 
 // ============================================================
-// 8. INIT
+// 9. INIT
 // ============================================================
 cancelEdit();
 loadAndRender();

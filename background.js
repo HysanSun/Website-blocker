@@ -19,6 +19,7 @@ const STORAGE_KEYS = {
   POMODORO: 'pomodoro',
   POMODORO_SETTINGS: 'pomodoroSettings',
   USAGE_CLOCK: 'usageClock',
+  TEMP_UNLOCKS: 'tempUnlocks',
   TODO: 'todo'
 };
 // Liveness marker in storage.session: it rides out service-worker suspension
@@ -38,6 +39,12 @@ const POMODORO_RULE_ID_OFFSET = 1500000;
 // 1..N complete blocks, 1000000+ exceptions, 1500000+ timed rules pinned by a
 // focus session, 2000000+ timed rules that are over quota.
 const ALLOW_RULE_ID_OFFSET = 1000000;
+// Temporary unlocks ("let me through for 30 minutes") get a band above
+// everything else so nothing that filters on a lower offset can sweep them up.
+const TEMP_UNLOCK_ID_OFFSET = 3000000;
+const TEMP_UNLOCK_ALARM = 'tempUnlock';
+const TEMP_UNLOCK_MAX_MIN = 240;
+const TEMP_UNLOCK_DEFAULT_MIN = 30;
 // The resource types every website rule covers, so the three places that build
 // a rule cannot drift apart.
 const RULE_RESOURCE_TYPES = ['main_frame', 'sub_frame', 'stylesheet', 'script',
@@ -154,6 +161,130 @@ function isExceptedHost(items, host) {
   return false;
 }
 
+// --- rule time windows ----------------------------------------------------
+// A rule may carry `window: { days: [0..6], from: 'HH:MM', to: 'HH:MM' }`,
+// where 0 is Sunday. Outside its window a rule is not enforced and a timed rule
+// is not counted - the site simply is not on the list for that hour. `to`
+// earlier than `from` means the window runs past midnight, and the part after
+// midnight still belongs to the day it started on.
+function parseClock(text) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(text == null ? '' : text).trim());
+  if (!m) return null;
+  const hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function hasWindow(item) {
+  return !!(item && item.window && typeof item.window === 'object');
+}
+
+function ruleWindowActive(item, date) {
+  if (!hasWindow(item)) return true;
+  const from = parseClock(item.window.from);
+  const to = parseClock(item.window.to);
+  // A window nobody can read would silently switch the rule off, and staying
+  // blocked is the safe direction to fail in.
+  if (from === null || to === null) return true;
+  const nowMin = date.getHours() * 60 + date.getMinutes();
+  const crossesMidnight = from > to;
+  const inRange = crossesMidnight
+    ? (nowMin >= from || nowMin < to)
+    : (nowMin >= from && nowMin < to);
+  const days = Array.isArray(item.window.days) ? item.window.days : null;
+  if (!days || !days.length) return inRange;
+  const day = date.getDay();
+  const belongsTo = (crossesMidnight && nowMin < to) ? (day + 6) % 7 : day;
+  return inRange && days.indexOf(belongsTo) !== -1;
+}
+
+// One character per windowed rule: enough to notice that a window opened or
+// closed without recomputing the whole rule set every minute.
+function windowSignatureOf(items, date) {
+  const now = date || new Date();
+  return (items || []).filter(hasWindow)
+    .map(item => (ruleWindowActive(item, now) ? '1' : '0'))
+    .join('');
+}
+
+let lastWindowSignature = null;
+
+// --- temporary unlocks ----------------------------------------------------
+// The escape hatch that does not require deleting the extension. Keyed by host,
+// so it can only ever open the site the user was looking at, and it expires on
+// its own.
+function tempUnlockHosts(raw, now) {
+  const map = (raw && typeof raw === 'object') ? raw : {};
+  const out = [];
+  for (const key of Object.keys(map)) {
+    const until = Number(map[key]);
+    if (isFinite(until) && until > now) out.push({ host: normalizeHost(key), until: until });
+  }
+  return out;
+}
+
+async function getTempUnlocks() {
+  const res = await chrome.storage.local.get([STORAGE_KEYS.TEMP_UNLOCKS]);
+  return tempUnlockHosts(res[STORAGE_KEYS.TEMP_UNLOCKS], Date.now());
+}
+
+async function tempUnlock(val, minutes) {
+  const host = normalizeHost(val);
+  if (!host) return null;
+  const res = await chrome.storage.local.get([STORAGE_KEYS.TEMP_UNLOCKS]);
+  const map = (res[STORAGE_KEYS.TEMP_UNLOCKS] && typeof res[STORAGE_KEYS.TEMP_UNLOCKS] === 'object')
+    ? res[STORAGE_KEYS.TEMP_UNLOCKS] : {};
+  // minutes === 0 is "lock it again now", so the caller does not need a second
+  // message just to undo this one.
+  if (Number(minutes) === 0) {
+    delete map[host];
+    await chrome.storage.local.set({ [STORAGE_KEYS.TEMP_UNLOCKS]: map });
+    return { host: host, until: 0 };
+  }
+  const mins = Math.min(TEMP_UNLOCK_MAX_MIN,
+    Math.max(1, Math.round(Number(minutes) || TEMP_UNLOCK_DEFAULT_MIN)));
+  map[host] = Date.now() + mins * 60 * 1000;
+  await chrome.storage.local.set({ [STORAGE_KEYS.TEMP_UNLOCKS]: map });
+  return { host: host, until: map[host] };
+}
+
+async function expireTempUnlocks() {
+  const res = await chrome.storage.local.get([STORAGE_KEYS.TEMP_UNLOCKS]);
+  const map = res[STORAGE_KEYS.TEMP_UNLOCKS];
+  if (!map || typeof map !== 'object') return false;
+  const now = Date.now();
+  let changed = false;
+  for (const key of Object.keys(map)) {
+    if (!(Number(map[key]) > now)) {
+      delete map[key];
+      changed = true;
+    }
+  }
+  if (changed) await chrome.storage.local.set({ [STORAGE_KEYS.TEMP_UNLOCKS]: map });
+  return changed;
+}
+
+async function armTempUnlockAlarm() {
+  await chrome.alarms.clear(TEMP_UNLOCK_ALARM);
+  const unlocks = await getTempUnlocks();
+  if (!unlocks.length) return;
+  const soonest = Math.min.apply(null, unlocks.map(u => u.until));
+  chrome.alarms.create(TEMP_UNLOCK_ALARM, { when: soonest });
+}
+
+// The block page is told which rule sent the tab there, so it can offer the one
+// thing the user actually wants at that moment: a timed way back in. Carrying it
+// in the redirect path is the only signal available - by the time the tab is on
+// blockpage.html, the original URL is gone. A keyword rule has no host, so it
+// gets the bare page.
+function blockRedirectPath(item) {
+  if (item && item.mode === 'website' && item.val) {
+    return '/blockpage.html?host=' + encodeURIComponent(String(item.val));
+  }
+  return '/blockpage.html';
+}
+
 // Every write to the dynamic rule set goes through this one queue, so the
 // helpers above it are pure and can be called from anywhere.
 let dnrWriteQueue = Promise.resolve();
@@ -238,10 +369,12 @@ async function syncAllRulesNow() {
     // Get current state: blocked items + daily usage + pomodoro (for strictNow)
     const [syncData, localData] = await Promise.all([
       chrome.storage.sync.get([STORAGE_KEYS.BLOCKED_ITEMS]),
-      chrome.storage.local.get([STORAGE_KEYS.DAILY_USAGE, STORAGE_KEYS.POMODORO])
+      chrome.storage.local.get([STORAGE_KEYS.DAILY_USAGE, STORAGE_KEYS.POMODORO,
+        STORAGE_KEYS.TEMP_UNLOCKS])
     ]);
 
     items = syncData[STORAGE_KEYS.BLOCKED_ITEMS] || [];
+    const now = new Date();
     const today = getTodayKey();
     const dailyUsage = localData[STORAGE_KEYS.DAILY_USAGE] || {};
     // A running focus session blocks timed sites outright, whatever today's
@@ -261,6 +394,9 @@ async function syncAllRulesNow() {
 
     items.forEach((item, idx) => {
       if (isException(item)) return;   // exceptions become allow rules below
+      // Outside its window a rule is simply not on today's list - not weaker,
+      // absent - and a timed rule does not accrue quota either.
+      if (!ruleWindowActive(item, now)) return;
       if (item.type === 'block') {
         // Complete block — always register DNR rule
         const filterPattern = (item.mode === 'website')
@@ -270,7 +406,7 @@ async function syncAllRulesNow() {
         rulesToAdd.push({
           id: ruleIndex + 1,
           priority: 10,
-          action: { type: 'redirect', redirect: { extensionPath: '/blockpage.html' } },
+          action: { type: 'redirect', redirect: { extensionPath: blockRedirectPath(item) } },
           condition: {
             urlFilter: filterPattern,
             resourceTypes: RULE_RESOURCE_TYPES
@@ -292,7 +428,7 @@ async function syncAllRulesNow() {
             // enforceTimeLimit / resetDailyLimits filter, which owns quota rules.
             id: strictNow ? POMODORO_RULE_ID_OFFSET + idx : TIMED_RULE_ID_OFFSET + idx,
             priority: 10,
-            action: { type: 'redirect', redirect: { extensionPath: '/blockpage.html' } },
+            action: { type: 'redirect', redirect: { extensionPath: blockRedirectPath(item) } },
             condition: {
               urlFilter: filterPattern,
               resourceTypes: RULE_RESOURCE_TYPES
@@ -313,6 +449,22 @@ async function syncAllRulesNow() {
         condition: { urlFilter: hostUrlFilter(host), resourceTypes: RULE_RESOURCE_TYPES }
       });
     }
+
+    // A temporary unlock is an allow rule just like an exception, but it
+    // carries an expiry and lives in its own id band so the two can never
+    // collide.
+    for (const unlock of tempUnlockHosts(localData[STORAGE_KEYS.TEMP_UNLOCKS], now.getTime())) {
+      rulesToAdd.push({
+        id: TEMP_UNLOCK_ID_OFFSET + rulesToAdd.length,
+        priority: 100,
+        action: { type: 'allow' },
+        condition: { urlFilter: hostUrlFilter(unlock.host), resourceTypes: RULE_RESOURCE_TYPES }
+      });
+    }
+
+    // Remember which windows are open, so the per-minute tracker can notice a
+    // window opening or closing without recomputing the rules every tick.
+    lastWindowSignature = windowSignatureOf(items, now);
 
     // Clears the previous set and installs the new one in one atomic update,
     // including when rulesToAdd is empty.
@@ -383,10 +535,12 @@ function creditForInterval(clock, now) {
 // The timed rule that owns this host, or null. An excepted host never matches:
 // the user said not to apply their rules there, and the daily quota is one of
 // them.
-function timedRuleForHost(items, host) {
+function timedRuleForHost(items, host, date) {
   if (isExceptedHost(items, host)) return null;
+  const now = date || new Date();
   for (const item of items) {
     if (isException(item)) continue;
+    if (!ruleWindowActive(item, now)) continue;
     if (item.type === 'timed' && item.mode === 'website' && hostMatches(host, item.val)) {
       return item;
     }
@@ -420,7 +574,13 @@ async function trackActiveTab() {
     if (tab && tab.url) {
       const { [STORAGE_KEYS.BLOCKED_ITEMS]: storedItems } =
         await chrome.storage.sync.get([STORAGE_KEYS.BLOCKED_ITEMS]);
-      matched = timedRuleForHost(storedItems || [], hostOfUrl(tab.url));
+      const items = storedItems || [];
+      // A window opening or closing changes what is blocked, and this per-minute
+      // tick is the only thing that runs often enough to notice.
+      if (windowSignatureOf(items) !== lastWindowSignature) {
+        await syncAllRules();
+      }
+      matched = timedRuleForHost(items, hostOfUrl(tab.url));
     }
 
     // 3c. Close the interval that just ended, then open the new one
@@ -484,7 +644,10 @@ async function redirectActiveTabAway(domain) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (tab && tab.url && hostMatches(hostOfUrl(tab.url), domain)) {
-      await chrome.tabs.update(tab.id, { url: chrome.runtime.getURL('blockpage.html') });
+      await chrome.tabs.update(tab.id, {
+        url: chrome.runtime.getURL('blockpage.html?host=' + encodeURIComponent(domain) +
+          '&url=' + encodeURIComponent(tab.url))
+      });
     }
   } catch (e) {
     console.debug('[Blocker] Could not redirect active tab:', e.message);
@@ -670,7 +833,10 @@ const POMODORO_SETTINGS_DEFAULTS = {
   cyclesUntilLongBreak: 4,
   autoStartBreak: true,
   autoStartFocus: false,
-  focusBlocksTimed: true
+  focusBlocksTimed: true,
+  // Off by default: a tool that beeps before the user asked it to is a tool
+  // they uninstall.
+  soundOn: false
 };
 
 const POMODORO_STATE_DEFAULTS = {
@@ -718,6 +884,7 @@ function sanitizePomodoroSettings(raw) {
   s.autoStartBreak = !!s.autoStartBreak;
   s.autoStartFocus = !!s.autoStartFocus;
   s.focusBlocksTimed = !!s.focusBlocksTimed;
+  s.soundOn = !!s.soundOn;
   s.v = 1;
   return s;
 }
@@ -831,6 +998,42 @@ function notifyPomodoroPhase(fromPhase, toPhase, lateMs, settings) {
   }
 }
 
+// A service worker cannot play audio, so the chime needs an offscreen
+// document. Every step is optional: a Chrome without the offscreen API, or a
+// document that cannot be created, simply means no sound.
+const OFFSCREEN_PATH = 'offscreen.html';
+
+async function ensureOffscreen() {
+  if (!chrome.offscreen || !chrome.offscreen.createDocument) return false;
+  try {
+    if (chrome.offscreen.hasDocument && await chrome.offscreen.hasDocument()) return true;
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_PATH,
+      reasons: ['AUDIO_PLAYBACK'],
+      justification: 'Play a short chime when a focus session or a break ends.'
+    });
+    return true;
+  } catch (err) {
+    // Two workers racing to create it is the one failure that is harmless.
+    if (/single offscreen/i.test(String((err && err.message) || ''))) return true;
+    console.debug('[Blocker] Offscreen document unavailable:', err.message);
+    return false;
+  }
+}
+
+async function playPhaseSound(fromPhase) {
+  try {
+    if (!(await ensureOffscreen())) return;
+    chrome.runtime.sendMessage({ action: 'playChime', kind: fromPhase }, function () {
+      // The offscreen document does not answer; reading lastError keeps Chrome
+      // from logging an unchecked-error warning.
+      void chrome.runtime.lastError;
+    });
+  } catch (err) {
+    console.debug('[Blocker] Chime skipped:', err.message);
+  }
+}
+
 // Exactly one transition per call, and credit is false for skip (the session
 // is not counted). The next phase always starts from `now`, never from the
 // stale deadline: a session that expired three hours ago advances exactly one
@@ -922,6 +1125,9 @@ async function pomodoroTick() {
     await pomodoroEnterNextPhase(state, settings, now, true);
     await writePomodoroState(state, settings);
     notifyPomodoroPhase(fromPhase, state.phase, lateMs, settings);
+    // Not awaited: a chime must never hold up the transition, and a failed one
+    // must never turn into an unhandled rejection.
+    if (settings.soundOn) playPhaseSound(fromPhase).catch(() => {});
     return { changed: true };
   } catch (err) {
     console.warn('[Blocker] Pomodoro tick skipped:', err);
@@ -1261,6 +1467,55 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 // ============================================================
+// 7b. KEYBOARD SHORTCUTS
+//
+// Reducing friction is the whole point of a tool like this: the two things a
+// user does most often should not need the mouse.
+// ============================================================
+async function openPomodoroWindow() {
+  const url = chrome.runtime.getURL('pomodoro.html');
+  try {
+    // One window, never two: focusing the existing one beats opening a
+    // duplicate the user then has to close.
+    const wins = await chrome.windows.getAll({ populate: true });
+    for (const win of wins || []) {
+      for (const tab of (win.tabs || [])) {
+        if ((tab.url || '').indexOf('pomodoro.html') !== -1) {
+          await chrome.windows.update(win.id, { focused: true });
+          return;
+        }
+      }
+    }
+    await chrome.windows.create({ url: url, type: 'popup', width: 460, height: 660 });
+  } catch (err) {
+    console.debug('[Blocker] Could not open the pomodoro window:', err.message);
+  }
+}
+
+async function togglePomodoroTimer() {
+  const state = await getPomodoroState();
+  if (state.phase === 'idle') return;
+  const paused = state.pausedRemainingMs !== null && state.pausedRemainingMs !== undefined;
+  // A focus session only has the one pause, and the worker refuses a second
+  // one; the shortcut must not become a way around that.
+  if (paused) await pomodoroResume();
+  else await pomodoroPause();
+  await pomodoroAfterChange();
+}
+
+// chrome.commands is absent in the test harness and can be missing on a Chrome
+// that does not support a suggested key, so register defensively.
+if (chrome.commands && chrome.commands.onCommand) {
+  chrome.commands.onCommand.addListener((command) => {
+    if (command === 'open-pomodoro') {
+      openPomodoroWindow();
+    } else if (command === 'toggle-timer') {
+      togglePomodoroTimer().catch(err => console.warn('[Blocker] Shortcut skipped:', err));
+    }
+  });
+}
+
+// ============================================================
 // 8. ALARM HANDLERS
 // ============================================================
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -1273,6 +1528,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     pomodoroTickAndApplySafe();
   } else if (alarm.name === 'dailyReset') {
     resetDailyLimits();
+  } else if (alarm.name === TEMP_UNLOCK_ALARM) {
+    // An unlock ran out: drop it and let the rules follow.
+    expireTempUnlocks()
+      .then(() => syncAllRules())
+      .then(() => armTempUnlockAlarm())
+      .catch(err => console.warn('[Blocker] Temp unlock cleanup skipped:', err));
   }
 });
 
@@ -1308,6 +1569,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'resetDaily': {
         await resetDailyLimits();
         sendResponse({ success: true });
+        break;
+      }
+      case 'getTempUnlocks': {
+        sendResponse({ success: true, tempUnlocks: await getTempUnlocks() });
+        break;
+      }
+      case 'tempUnlock': {
+        await tempUnlock(message.val, message.minutes);
+        await syncAllRules();
+        await trackActiveTab();
+        sendResponse({ success: true, tempUnlocks: await getTempUnlocks() });
         break;
       }
       case 'pomodoroGetState': {
@@ -1432,6 +1704,15 @@ async function initialize() {
 
   await armPomodoroAlarm();
   await updatePomodoroBadge();
+
+  // A temporary unlock outlives the worker, so the alarm that re-locks the site
+  // has to be re-armed on every start, not only when the unlock was granted.
+  try {
+    await expireTempUnlocks();
+    await armTempUnlockAlarm();
+  } catch (err) {
+    console.warn('[Blocker] Temp unlock startup skipped:', err.message);
+  }
 
   // Start per-minute time tracking
   chrome.alarms.create('tracking', { periodInMinutes: TRACKING_INTERVAL_SEC / 60 });

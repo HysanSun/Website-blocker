@@ -1177,6 +1177,158 @@ const scenarios = [
       return [ok, 'a=' + (r.a / 1000) + 's b=' + (r.b / 1000) + 's'];
     },
   },
+  {
+    name: 'P32 a rule with a time window is absent outside it, and present inside',
+    run: async () => {
+      NOW = T0; // 12:00
+      const nightly = {
+        val: 'testsite.invalid', mode: 'website', type: 'block',
+        window: { days: [0, 1, 2, 3, 4, 5, 6], from: '22:00', to: '06:00' },
+      };
+      const s = seed({ rules: [nightly] });
+      // The signature check lives inside the tracking tick's "is there a tab in
+      // front of the user" branch, so the scenario needs one.
+      const life = runLifetime(s, { activeTab: { id: 3, url: 'https://elsewhere.invalid/' } });
+      await life.settle();
+      const count = () => life.getRules().filter((r) => r.condition &&
+        String(r.condition.urlFilter).indexOf('testsite.invalid') !== -1).length;
+      const rulesAtNoon = count();
+
+      // 22:30 the same day: the window has opened, and the minute tick is the
+      // only thing that can notice.
+      NOW = T0 + 10 * 60 * MIN + 30 * MIN;
+      life.fireAlarm('tracking');
+      await drain();
+      const rulesAtNight = count();
+
+      // 06:30 the next morning: it has closed again.
+      NOW = T0 + 18 * 60 * MIN + 30 * MIN;
+      life.fireAlarm('tracking');
+      await drain();
+      const rulesNextMorning = count();
+      return { rulesAtNoon, rulesAtNight, rulesNextMorning };
+    },
+    expect: (r) => {
+      const ok = r.rulesAtNoon === 0 && r.rulesAtNight === 1 && r.rulesNextMorning === 0;
+      return [ok, 'noon=' + r.rulesAtNoon + ' night=' + r.rulesAtNight +
+        ' nextMorning=' + r.rulesNextMorning];
+    },
+  },
+  {
+    name: 'P33 a window that crosses midnight still belongs to the day it started',
+    run: async () => {
+      // Three short lifetimes at fixed clock times. The only thing that differs
+      // is the `days` list, which is what isolates the midnight rule.
+      const at = (dayOffset, hh, mm) => {
+        const d = new Date(T0);
+        d.setDate(d.getDate() + dayOffset);
+        d.setHours(hh, mm, 0, 0);
+        return d.getTime();
+      };
+      const weekdayOf = (t) => new Date(t).getDay();
+      const nightly = (days) => ({
+        val: 'testsite.invalid', mode: 'website', type: 'block',
+        window: { days: days, from: '22:00', to: '06:00' },
+      });
+      const has = (life) => life.getRules().some((r) => r.condition &&
+        String(r.condition.urlFilter).indexOf('testsite.invalid') !== -1);
+
+      const run = async (now, days) => {
+        NOW = now;
+        const life = runLifetime(seed({ rules: [nightly(days)] }));
+        await life.settle();
+        return has(life);
+      };
+
+      const tueNight = at(0, 23, 0);
+      const wedDawn = at(1, 5, 0);
+      const openAtNight = await run(tueNight, [weekdayOf(tueNight)]);
+      // 05:00 on Wednesday still belongs to Tuesday's window.
+      const dawnOwned = await run(wedDawn, [weekdayOf(tueNight)]);
+      // ...and Wednesday's own window has not started yet at 05:00.
+      const dawnUnopened = await run(wedDawn, [weekdayOf(wedDawn)]);
+      return { openAtNight, dawnOwned, dawnUnopened };
+    },
+    expect: (r) => {
+      const ok = r.openAtNight === true && r.dawnOwned === true && r.dawnUnopened === false;
+      return [ok, 'openAtNight=' + r.openAtNight + ' dawnStillOpen=' + r.dawnOwned +
+        ' nextDayNotYet=' + r.dawnUnopened];
+    },
+  },
+  {
+    name: 'P34 a temporary unlock becomes an allow rule and re-locks when it expires',
+    run: async () => {
+      NOW = T0;
+      const s = seed({ rules: [{ val: 'testsite.invalid', mode: 'website', type: 'block' }] });
+      s.local.tempUnlocks = { 'pan.testsite.invalid': T0 + 30 * MIN };
+      const life = runLifetime(s);
+      await life.settle();
+
+      const allowFilter = (rules) => {
+        const hit = rules.filter((r) => r.action && r.action.type === 'allow');
+        return hit.length ? String(hit[0].condition.urlFilter) : '';
+      };
+      const openFilter = allowFilter(life.getRules());
+      const armedWhen = life.alarmCalls.filter((a) => a.name === 'tempUnlock' && a.info && a.info.when)
+        .map((a) => a.info.when);
+
+      advance(31 * MIN);
+      life.fireAlarm('tempUnlock');
+      await drain();
+      const afterFilter = allowFilter(life.getRules());
+      const mapAfter = s.local.tempUnlocks || {};
+      return { openFilter, armedWhen, afterFilter, left: Object.keys(mapAfter).length };
+    },
+    expect: (r) => {
+      const ok = r.openFilter === '||pan.testsite.invalid^' &&
+        r.armedWhen.indexOf(T0 + 30 * MIN) !== -1 &&
+        r.afterFilter === '' && r.left === 0;
+      return [ok, 'open=' + r.openFilter + ' armedAtExpiry=' +
+        (r.armedWhen.indexOf(T0 + 30 * MIN) !== -1) + ' afterExpiry=' + (r.afterFilter || 'none')];
+    },
+  },
+  {
+    name: 'P35 granting and revoking an unlock through the message handler',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [{ val: 'testsite.invalid', mode: 'website', type: 'timed', limitMin: 30 }],
+        dailyUsage: { [todayKey()]: { 'testsite.invalid': 45 * MIN } },
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      const blockedBefore = life.getRules().filter((r) => r.action && r.action.type === 'redirect').length;
+
+      const granted = await life.sendMessage({ action: 'tempUnlock', val: 'testsite.invalid', minutes: 30 });
+      const listed = await life.sendMessage({ action: 'getTempUnlocks' });
+      const allowAfterGrant = life.getRules().filter((r) => r.action && r.action.type === 'allow');
+      const blockedAfter = life.getRules().filter((r) => r.action && r.action.type === 'redirect').length;
+
+      const revoked = await life.sendMessage({ action: 'tempUnlock', val: 'testsite.invalid', minutes: 0 });
+      const listedAfter = await life.sendMessage({ action: 'getTempUnlocks' });
+      const allowAfterRevoke = life.getRules().filter((r) => r.action && r.action.type === 'allow').length;
+      return { blockedBefore, granted, listed, allowAfterGrant, blockedAfter, revoked, listedAfter,
+        allowAfterRevoke };
+    },
+    expect: (r) => {
+      // The site is over its daily quota, so it is blocked; the unlock is an
+      // allow rule at a priority the redirect cannot beat.
+      const allow = r.allowAfterGrant[0];
+      const ok = r.blockedBefore === 1 &&
+        r.granted && r.granted.success === true &&
+        r.listed && r.listed.success === true && r.listed.tempUnlocks.length === 1 &&
+        r.blockedAfter === 1 &&
+        !!allow && allow.priority === 100 &&
+        String(allow.condition.urlFilter) === '||testsite.invalid^' &&
+        r.revoked && r.revoked.success === true &&
+        r.listedAfter && r.listedAfter.tempUnlocks.length === 0 &&
+        r.allowAfterRevoke === 0;
+      return [ok, 'blocked=' + r.blockedBefore + '/' + r.blockedAfter +
+        ' allowPrio=' + (allow ? allow.priority : 'none') +
+        ' listed=' + (r.listed && r.listed.tempUnlocks ? r.listed.tempUnlocks.length : '?') +
+        ' afterRevoke=' + r.allowAfterRevoke];
+    },
+  },
 ];
 (async () => {
   for (const sc of scenarios) {

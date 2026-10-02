@@ -8,8 +8,56 @@ function getTodayKey() {
     return new Date().toLocaleDateString('zh-CN');
 }
 
-function redirectToBlockPage() {
-    window.location.href = chrome.runtime.getURL('blockpage.html');
+// The block page is told which host sent the tab there so it can offer a timed
+// way back in. The value comes from a rule the user wrote, and the worker
+// normalizes it again before anything is stored.
+function redirectToBlockPage(host) {
+    var path = 'blockpage.html';
+    var query = [];
+    if (host) query.push('host=' + encodeURIComponent(host));
+    // The exact page, so "Unlock" lands back where the user was rather than on
+    // the bare host.
+    query.push('url=' + encodeURIComponent(window.location.href));
+    if (query.length) path += '?' + query.join('&');
+    window.location.href = chrome.runtime.getURL(path);
+}
+
+// A rule may carry a window; outside it the rule is simply not on the list.
+// Mirrors ruleWindowActive() in background.js.
+function parseClock(text) {
+    var m = /^(\d{1,2}):(\d{2})$/.exec(String(text == null ? '' : text).trim());
+    if (!m) return null;
+    var h = Number(m[1]);
+    var mm = Number(m[2]);
+    if (h > 23 || mm > 59) return null;
+    return h * 60 + mm;
+}
+
+function ruleWindowActive(rule, now) {
+    var win = rule && rule.window;
+    if (!win || typeof win !== 'object') return true;
+    var from = parseClock(win.from);
+    var to = parseClock(win.to);
+    if (from === null || to === null) return true;
+    var nowMin = now.getHours() * 60 + now.getMinutes();
+    var crosses = from > to;
+    var inRange = crosses ? (nowMin >= from || nowMin < to) : (nowMin >= from && nowMin < to);
+    var days = (win.days && win.days.length) ? win.days : null;
+    if (!days) return inRange;
+    var day = now.getDay();
+    var belongsTo = (crosses && nowMin < to) ? (day + 6) % 7 : day;
+    return inRange && days.indexOf(belongsTo) !== -1;
+}
+
+// "Let me through for 30 minutes" is stored by the worker as {host: until}.
+function tempUnlockActive(raw, host, now) {
+    if (!raw || typeof raw !== 'object') return false;
+    for (var key in raw) {
+        if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+        if (!(Number(raw[key]) > now)) continue;
+        if (hostMatches(host, key)) return true;
+    }
+    return false;
 }
 
 // A rule value covers its host and every subdomain of it, and nothing else:
@@ -71,52 +119,57 @@ function checkAndBlock() {
         var currentUrl = window.location.href.toLowerCase();
         var host = window.location.hostname.toLowerCase();
 
-        // An exception wins over every rule below, whatever their type.
-        for (var e = 0; e < exceptionRules.length; e++) {
-            if (hostMatches(host, exceptionHost(exceptionRules[e]))) {
-                return;
-            }
-        }
+        // A temporary unlock is the same allow rule as an exception, only with
+        // an expiry, so it wins in exactly the same place.
+        chrome.storage.local.get(['dailyUsage', 'pomodoro', 'tempUnlocks'], function (localRes) {
+            var now = new Date();
+            if (tempUnlockActive(localRes.tempUnlocks, host, now.getTime())) return;
 
-        // 1. Check complete block rules first (always enforced)
-        for (var j = 0; j < completeRules.length; j++) {
-            var item = completeRules[j];
-            if (item.mode === 'website') {
-                if (hostMatches(host, item.val)) {
-                    redirectToBlockPage();
-                    return;
-                }
-            } else if (item.mode === 'keyword') {
-                if (currentUrl.indexOf('q=') !== -1 && currentUrl.indexOf(item.val) !== -1) {
-                    redirectToBlockPage();
+            // An exception wins over every rule below, whatever their type.
+            for (var e = 0; e < exceptionRules.length; e++) {
+                if (hostMatches(host, exceptionHost(exceptionRules[e]))) {
                     return;
                 }
             }
-        }
 
-        // 2. Check timed rules — need daily usage plus the pomodoro mirror
-        if (timedRules.length > 0) {
-            chrome.storage.local.get(['dailyUsage', 'pomodoro'], function (localRes) {
-                var dailyUsage = localRes.dailyUsage || {};
-                var today = getTodayKey();
-                var todayUsage = dailyUsage[today] || {};
-                // A running focus session blocks timed sites outright, whatever
-                // today's usage is. The background state machine owns this flag.
-                var strictNow = !!(localRes.pomodoro && localRes.pomodoro.strictNow);
-
-                for (var k = 0; k < timedRules.length; k++) {
-                    var timedRule = timedRules[k];
-                    if (hostMatches(host, timedRule.val)) {
-                        var usedMs = todayUsage[timedRule.val] || 0;
-                        var limitMs = (timedRule.limitMin || 30) * 60 * 1000;
-                        if (strictNow || usedMs >= limitMs) {
-                            redirectToBlockPage();
-                            return;
-                        }
+            // 1. Check complete block rules first (always enforced)
+            for (var j = 0; j < completeRules.length; j++) {
+                var item = completeRules[j];
+                if (!ruleWindowActive(item, now)) continue;
+                if (item.mode === 'website') {
+                    if (hostMatches(host, item.val)) {
+                        redirectToBlockPage(item.val);
+                        return;
+                    }
+                } else if (item.mode === 'keyword') {
+                    if (currentUrl.indexOf('q=') !== -1 && currentUrl.indexOf(item.val) !== -1) {
+                        redirectToBlockPage(null);
+                        return;
                     }
                 }
-            });
-        }
+            }
+
+            // 2. Check timed rules — need daily usage plus the pomodoro mirror
+            var dailyUsage = localRes.dailyUsage || {};
+            var today = getTodayKey();
+            var todayUsage = dailyUsage[today] || {};
+            // A running focus session blocks timed sites outright, whatever
+            // today's usage is. The background state machine owns this flag.
+            var strictNow = !!(localRes.pomodoro && localRes.pomodoro.strictNow);
+
+            for (var k = 0; k < timedRules.length; k++) {
+                var timedRule = timedRules[k];
+                if (!ruleWindowActive(timedRule, now)) continue;
+                if (hostMatches(host, timedRule.val)) {
+                    var usedMs = todayUsage[timedRule.val] || 0;
+                    var limitMs = (timedRule.limitMin || 30) * 60 * 1000;
+                    if (strictNow || usedMs >= limitMs) {
+                        redirectToBlockPage(timedRule.val);
+                        return;
+                    }
+                }
+            }
+        });
     });
 }
 

@@ -204,6 +204,14 @@ def main():
                 if landed:
                     check("block page shows the pomodoro entry",
                           "focus session" in probe.eval_on_selector("#pomodoro-line", "e=>e.textContent").lower())
+                    # The redirect carries the rule that fired, so the page can
+                    # offer the one thing the user wants: a timed way back in.
+                    check("the redirect names the rule that fired",
+                          "host=example.com" in probe.url, probe.url)
+                    probe.wait_for_timeout(600)
+                    check("the blocked page offers a timed unlock",
+                          probe.eval_on_selector("#unlock-row", "e=>e.hidden") is False
+                          and "Unlock" in probe.eval_on_selector("#unlock-btn", "e=>e.textContent"))
 
             # 5. The stopwatch button is the only way into the timer from the
             # blocked page, so a dead button makes the feature look broken no
@@ -231,6 +239,42 @@ def main():
             check("a burst of rule syncs leaves exactly one rule per blocked site",
                   rules.count('"id":1') == 1 and "example.com" in rules,
                   rules[:140] + " | items=" + str(items_now)[:80])
+
+            # 6b. Tier 2: a rule with a time window is only installed while its
+            # window is open, and the settings page has to be able to write one.
+            st = ctx.new_page()
+            st.on("pageerror", lambda e: (errors.append(str(e)), print("  [page error] %s" % e)))
+            st.goto("chrome-extension://%s/settings.html" % ext_id)
+            st.wait_for_timeout(900)
+            check("settings page exposes the window control",
+                  st.eval_on_selector_all("#window-toggle", "els=>els.length") == 1)
+            st.click("#window-toggle")
+            st.wait_for_timeout(200)
+            check("the window control opens its day and hour pickers",
+                  st.eval_on_selector("#window-group", "e=>e.hidden") is False)
+            # A window that is closed right now: 00:00-00:01 today. The rule may
+            # exist in storage, but no DNR rule may be derived from it.
+            st.evaluate("""() => new Promise(res => chrome.runtime.sendMessage({action:'saveRules',
+                rules:[{val:'example.com', type:'block', mode:'website'},
+                       {val:'windowed.invalid', type:'block', mode:'website',
+                        window:{days:[], from:'00:00', to:'00:01'}}]}, res))""")
+            st.wait_for_timeout(1200)
+            rules_w = sw.evaluate("async () => JSON.stringify(await chrome.declarativeNetRequest.getDynamicRules())")
+            stored_w = sw.evaluate("async () => JSON.stringify((await chrome.storage.sync.get(['blockedItems'])).blockedItems)")
+            check("a rule outside its window is stored but not enforced",
+                  "windowed.invalid" in stored_w and "windowed.invalid" not in rules_w,
+                  rules_w[:160])
+            # ...and the form round-trips a window back into the rule list. The
+            # rules were written straight to the worker, so the page has to be
+            # reloaded to see them (it only re-reads on its own every 30s).
+            st.reload()
+            st.wait_for_timeout(1000)
+            check("the rule list says when a windowed rule applies",
+                  "During" in st.eval_on_selector("#rules-list", "e=>e.textContent")
+                  or "Outside its hours" in st.eval_on_selector("#rules-list", "e=>e.textContent"))
+            check("the settings page offers a per-rule unlock",
+                  st.eval_on_selector_all(".rule-unlock-btn", "els=>els.length") >= 2)
+            st.close()
 
             # 7. The review question and the skip rule. Waiting out a real
             # 25 + 5 minute run is not a smoke test, so seed the worker state

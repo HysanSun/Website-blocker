@@ -64,6 +64,63 @@
         });
     }
 
+    // --- timed way back in (full-page form only) ---
+    var unlockRow = document.getElementById('unlock-row');
+    var unlockBtn = document.getElementById('unlock-btn');
+    var unlockNote = document.getElementById('unlock-note');
+    var params = new URLSearchParams(window.location.search);
+    var blockedVal = params.get('host') || '';
+    var blockedUrl = params.get('url') || '';
+    // The redirect carries a rule value, which may be a bare host, a subdomain
+    // or a keyword. Only a website rule can be unlocked.
+    var unlockHost = blockedVal.replace(/^!/, '').replace(/^https?:\/\//, '')
+        .replace(/\/.*$/, '').replace(/^\*\./, '').replace(/^\./, '').toLowerCase();
+
+    function destinationFor(host) {
+        if (blockedUrl && /^https?:\/\//i.test(blockedUrl)) return blockedUrl;
+        return 'https://' + host + '/';
+    }
+
+    function refreshUnlock() {
+        if (!unlockRow || !unlockHost) return;
+        chrome.runtime.sendMessage({ action: 'getTempUnlocks' }, function (res) {
+            var unlocks = (res && res.success && res.tempUnlocks) ? res.tempUnlocks : [];
+            var mine = null;
+            unlocks.forEach(function (u) {
+                if (unlockHost === u.host || unlockHost.slice(-(u.host.length + 1)) === '.' + u.host) mine = u;
+            });
+            unlockRow.hidden = false;
+            if (mine) {
+                var left = Math.max(1, Math.ceil((mine.until - Date.now()) / 60000));
+                unlockBtn.textContent = 'Open ' + unlockHost;
+                unlockNote.textContent = 'unlocked for ' + left + ' more min';
+            } else {
+                unlockBtn.textContent = 'Unlock 30 min';
+                unlockNote.textContent = 'a one-off, it re-locks by itself';
+            }
+        });
+    }
+
+    if (unlockBtn) {
+        unlockBtn.addEventListener('click', function () {
+            if (!unlockHost) return;
+            unlockBtn.disabled = true;
+            chrome.runtime.sendMessage({ action: 'getTempUnlocks' }, function (res) {
+                var unlocks = (res && res.success && res.tempUnlocks) ? res.tempUnlocks : [];
+                var open = false;
+                unlocks.forEach(function (u) { if (unlockHost === u.host) open = true; });
+                if (open) { window.location.href = destinationFor(unlockHost); return; }
+                chrome.runtime.sendMessage({ action: 'tempUnlock', val: unlockHost, minutes: 30 },
+                    function (r2) {
+                        if (r2 && r2.success) { window.location.href = destinationFor(unlockHost); return; }
+                        unlockBtn.disabled = false;
+                        refreshUnlock();
+                    });
+            });
+        });
+        refreshUnlock();
+    }
+
     // --- blocked-page status line (full-page form only) ---
     if (!line || !fullPage.matches) return;
 

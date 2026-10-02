@@ -8,13 +8,24 @@
     "storage",
     "alarms",
     "tabs",
-    "notifications"
+    "notifications",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "commands": {
+    "open-pomodoro": {
+      "suggested_key": { "default": "Alt+Shift+P" },
+      "description": "Open the pomodoro window"
+    },
+    "toggle-timer": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Pause or resume the running timer"
+    }
   },
   "incognito": "spanning", 
   "icons": {

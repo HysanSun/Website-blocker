@@ -240,6 +240,7 @@
         el('s-autobreak').checked = !!settings.autoStartBreak;
         el('s-autofocus').checked = !!settings.autoStartFocus;
         el('s-strict').checked = !!settings.focusBlocksTimed;
+        el('s-sound').checked = !!settings.soundOn;
     }
 
     // ------------------------------------------------------------
@@ -520,7 +521,8 @@
             cyclesUntilLongBreak: parseInt(el('s-cycles').value, 10),
             autoStartBreak: el('s-autobreak').checked,
             autoStartFocus: el('s-autofocus').checked,
-            focusBlocksTimed: el('s-strict').checked
+            focusBlocksTimed: el('s-strict').checked,
+            soundOn: el('s-sound').checked
         };
         act('pomodoroSaveSettings', { settings: payload }).then(function (res) {
             if (!res || !res.success) { if (window.WB) WB.error('Could not save the settings'); return; }
