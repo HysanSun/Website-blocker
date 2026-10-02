@@ -50,6 +50,20 @@
         });
     }
 
+    // --- way out of a blocked page (full-page form only) ---
+    var leaveBtn = document.getElementById('leave-btn');
+    if (leaveBtn) {
+        leaveBtn.addEventListener('click', function () {
+            // A tab that was redirected here cannot always close itself - only
+            // a script-opened tab can - so try that first and fall back to
+            // whatever the tab was showing before.
+            window.close();
+            setTimeout(function () {
+                if (!window.closed && history.length > 1) history.back();
+            }, 150);
+        });
+    }
+
     // --- blocked-page status line (full-page form only) ---
     if (!line || !fullPage.matches) return;
 

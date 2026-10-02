@@ -5,20 +5,30 @@
 const urlInput = document.getElementById('url-input');
 const modeSelect = document.getElementById('block-mode');
 const addBtn = document.getElementById('add-site');
-const msg = document.getElementById('message');
 const display = document.getElementById('streak-display');
-const resetBtn = document.getElementById('reset-btn');
 const settingsBtn = document.getElementById('settings-btn');
 const dailyUsageSection = document.getElementById('daily-usage-section');
 const dailyUsageList = document.getElementById('daily-usage-list');
 
 // ============================================================
-// 1. INTEGRITY CHECK (Popup Listener)
+// 1. VERSION LABEL + INTEGRITY CHECK (Popup Listener)
 // ============================================================
+// The page used to hard-code "v2.0" in the markup, so it kept claiming 2.0
+// while the extension moved on. The manifest is the one source of truth.
+function showVersion() {
+    var label = document.getElementById('version-label');
+    if (!label || !chrome.runtime.getManifest) return;
+    var version = chrome.runtime.getManifest().version;
+    label.textContent = version ? 'v' + version : '';
+}
 function checkIntegrity() {
     chrome.storage.local.get(['needsAlert'], (res) => {
         if (res.needsAlert) {
-            alert('STRIKE DETECTED: Permissions were changed or the extension was disabled. Your streak has been reset to 0.');
+            // The one message that explains why the number above went back to
+            // zero, so it stays up long enough to read. It used to be a native
+            // alert(), which is the coldest possible way to say it.
+            showHint('Strike detected: permissions were changed or the extension was ' +
+                'switched off, so the streak is back to 0.', 'error', 9000);
             chrome.storage.local.set({ needsAlert: false });
         }
     });
@@ -105,10 +115,10 @@ function renderDailyUsage() {
 // ============================================================
 // 4. UI FEEDBACK
 // ============================================================
-function showHint(text, type) {
-    msg.innerText = text;
-    msg.style.color = (type === 'success') ? '#27ae60' : '#e74c3c';
-    setTimeout(() => { msg.innerText = ''; }, 3000);
+// One channel for the whole extension (ui.js). The popup used to have its own
+// fixed-height line whose colour was picked here.
+function showHint(text, type, ms) {
+    if (window.WB) WB.toast(text, type === 'success' ? 'success' : 'error', ms);
 }
 
 // ============================================================
@@ -159,16 +169,11 @@ settingsBtn.addEventListener('click', (e) => {
     });
 });
 
-// ============================================================
-// 7. RESET BUTTON
-// ============================================================
-resetBtn.addEventListener('click', () => {
-    if (confirm('Reset your streak to zero?')) resetStreak();
-});
 
 // ============================================================
 // 8. INIT — run on popup open
 // ============================================================
+showVersion();
 checkIntegrity();
 updateStreak();
 renderDailyUsage();

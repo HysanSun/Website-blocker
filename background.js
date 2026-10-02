@@ -47,6 +47,7 @@ const RULE_RESOURCE_TYPES = ['main_frame', 'sub_frame', 'stylesheet', 'script',
 // is still worth showing - it must never affect crediting.
 const POMODORO_NOTIFY_MAX_LATE_MS = 2 * 60 * 1000;
 const POMODORO_NOTIFY_ID = 'pomodoro-phase';
+const QUOTA_WARNING_NOTIFY_ID = 'quota-warning';
 // A focus session may be paused exactly once, and for no longer than this: the
 // clock turns itself back on. Breaks are not limited - nothing is being
 // enforced while you are resting.
@@ -490,11 +491,22 @@ async function redirectActiveTabAway(domain) {
   }
 }
 
+// The last chance to wrap up before a timed site closes. This used to be a
+// bare console.log, so the first the user heard about it was the block page.
+// The notifications permission and the whole channel were already here for the
+// pomodoro phases; this only uses them.
 function showWarningNotification(domain, remainingMin) {
-  // Use a simple approach: set a flag that the popup can read
-  // Chrome notifications require 'notifications' permission
-  // For now, we log to console and the popup can show it
-  console.log('[Blocker] WARNING:', domain, 'has only', remainingMin, 'min remaining today');
+  if (!notificationsAvailable()) return;
+  try {
+    chrome.notifications.create(QUOTA_WARNING_NOTIFY_ID, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icon.png'),
+      title: 'Time limit almost up',
+      message: domain + ' has ' + remainingMin + ' min left today.'
+    });
+  } catch (err) {
+    console.debug('[Blocker] Quota warning skipped:', err.message);
+  }
 }
 
 // ============================================================
@@ -1228,7 +1240,9 @@ async function todoClearDone() {
 // handler, no alarm handler, no initialize(), no blocking at all.
 if (notificationsAvailable() && chrome.notifications.onClicked) {
   chrome.notifications.onClicked.addListener((id) => {
-    if (id === POMODORO_NOTIFY_ID) chrome.notifications.clear(id);
+    if (id === POMODORO_NOTIFY_ID || id === QUOTA_WARNING_NOTIFY_ID) {
+      chrome.notifications.clear(id);
+    }
   });
 }
 

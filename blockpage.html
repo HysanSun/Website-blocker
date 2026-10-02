@@ -4,15 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Focus Streak System</title>
+    <link rel="stylesheet" href="ui.css">
     <style>
         :root {
             --primary-color: #2c3e50;
-            --accent-color: #e67e22;
-            --success-color: #27ae60;
-            --danger-color: #e74c3c;
+            --accent-color: #b85c00;
+            --success-color: #1e8449;
+            --danger-color: #c0392b;
             --bg-light: #f8f9fa;
             --bg-page: #e8ecf1;
             --border-color: #ecf0f1;
+            --text-muted: #5f6f78;
             --radius-sm: 8px;
             --radius-md: 12px;
             --radius-lg: 20px;
@@ -42,6 +44,7 @@
         .blocked-icon  { display: none; }
         .blocked-title { display: none; }
         .pomodoro-line { display: none; }
+        .leave-btn { display: none; }
 
         /* ============================================
            FULL-PAGE MODE (blocked site redirect)
@@ -79,9 +82,25 @@
             .pomodoro-line {
                 display: block;
                 font-size: 0.82rem;
-                color: #7f8c8d;
+                color: var(--text-muted);
                 margin: 0 0 12px;
             }
+            /* The way out of a blocked page. Nothing else on this page is an
+               action the user can take right now. */
+            .leave-btn {
+                display: inline-block;
+                background: transparent;
+                border: none;
+                padding: 0 0 4px;
+                margin: 0 0 12px;
+                color: var(--accent-color);
+                font-family: inherit;
+                font-size: 0.78rem;
+                font-weight: 600;
+                text-decoration: underline;
+                cursor: pointer;
+            }
+            .leave-btn:hover { opacity: 0.8; }
         }
 
         /* --- Top Bar --- */
@@ -97,7 +116,7 @@
             border-radius: 50%;
             border: 1.5px solid #dcdde1;
             text-decoration: none;
-            color: #7f8c8d;
+            color: var(--text-muted);
             font-size: 14px;
             font-weight: bold;
             display: flex;
@@ -165,7 +184,7 @@
             text-transform: uppercase;
             letter-spacing: 1.5px;
             font-size: 0.72rem;
-            color: #95a5a6;
+            color: var(--text-muted);
             margin-top: 4px;
         }
 
@@ -184,7 +203,7 @@
             font-size: 0.65rem;
             text-transform: uppercase;
             letter-spacing: 1px;
-            color: #95a5a6;
+            color: var(--text-muted);
             text-align: left;
         }
         .usage-item {
@@ -221,7 +240,7 @@
         .usage-bar-fill.exceeded { background: var(--danger-color); }
         .usage-text {
             font-size: 0.68rem;
-            color: #7f8c8d;
+            color: var(--text-muted);
             width: 50px;
             text-align: right;
             flex-shrink: 0;
@@ -263,17 +282,6 @@
         }
         #add-site:hover { opacity: 0.9; }
 
-        /* --- Reset --- */
-        #reset-btn {
-            background: transparent;
-            color: var(--danger-color);
-            font-size: 0.73rem;
-            border: none;
-            cursor: pointer;
-            opacity: 0.65;
-            margin-bottom: 14px;
-        }
-        #reset-btn:hover { opacity: 1; }
 
         /* --- Footer --- */
         .copyright {
@@ -281,7 +289,7 @@
             border-top: 1px solid #f0f0f0;
             width: 100%;
             font-size: 0.58rem;
-            color: #bdc3c7;
+            color: var(--text-muted);
         }
     </style>
 </head>
@@ -289,27 +297,32 @@
 
 <div class="page-card">
 
-    <!-- Full-page only -->
-    <div class="blocked-icon">&#128683;</div>
-    <div id="pomodoro-line" class="pomodoro-line"></div>
-    <p class="blocked-title">This site has been blocked to keep you focused.</p>
-
-    <!-- Top bar -->
+    <!-- Top bar first: the blocked-page banner underneath pushes everything
+         after it down, and controls that end up in the middle of the card read
+         as content instead of as controls. -->
     <div class="top-bar">
         <a href="#manual-window" class="help-btn">?</a>
-        <span style="font-size:0.66rem;color:#bdc3c7;letter-spacing:1px;">v2.0</span>
+        <!-- Filled in from the manifest: a second hard-coded version here is
+             how the page came to claim v2.0 while the extension was on 2.0.2. -->
+        <span id="version-label" style="font-size:0.66rem;color:var(--text-muted);letter-spacing:1px;"></span>
         <a id="pomodoro-btn" class="settings-btn" title="Pomodoro">&#9201;</a>
         <a id="settings-btn" class="settings-btn" title="Settings">&#9881;</a>
     </div>
 
+    <!-- Full-page only -->
+    <div class="blocked-icon">&#128683;</div>
+    <div id="pomodoro-line" class="pomodoro-line"></div>
+    <p class="blocked-title">This site has been blocked to keep you focused.</p>
+    <button id="leave-btn" class="leave-btn">Close this tab</button>
+
     <!-- Manual -->
     <div id="manual-window">
         <h2 style="font-size:0.95rem;margin:0 0 8px;">Manual</h2>
-        <p style="font-size:0.78rem;color:#7f8c8d;margin:4px 0;"><strong>Website:</strong> Type 'ghcis.com' to lock.</p>
-        <p style="font-size:0.78rem;color:#7f8c8d;margin:4px 0;"><strong>Keyword:</strong> Type 'school' to block searches.</p>
-        <p style="font-size:0.78rem;color:#7f8c8d;margin:4px 0;"><strong>Timed:</strong> Click &#9881; to set daily time limits.</p>
-        <p style="font-size:0.78rem;color:#7f8c8d;margin:4px 0;"><strong>Warning:</strong> Cannot be unlocked unless you delete the extension.</p>
-        <p style="font-size:0.68rem;color:#bdc3c7;margin-top:12px;">(Click outside to close)</p>
+        <p style="font-size:0.78rem;color:var(--text-muted);margin:4px 0;"><strong>Website:</strong> Type 'ghcis.com' to lock.</p>
+        <p style="font-size:0.78rem;color:var(--text-muted);margin:4px 0;"><strong>Keyword:</strong> Type 'school' to block searches.</p>
+        <p style="font-size:0.78rem;color:var(--text-muted);margin:4px 0;"><strong>Timed:</strong> Click &#9881; to set daily time limits.</p>
+        <p style="font-size:0.78rem;color:var(--text-muted);margin:4px 0;"><strong>Warning:</strong> Cannot be unlocked unless you delete the extension.</p>
+        <p style="font-size:0.68rem;color:var(--text-muted);margin-top:12px;">(Click outside to close)</p>
     </div>
     <a href="#" class="backdrop"></a>
 
@@ -319,7 +332,7 @@
     <!-- Streak -->
     <div class="streak-container">
         <span id="streak-display">0</span>
-        <span class="label">Days Refined</span>
+        <span class="label">Days since last reset</span>
     </div>
 
     <!-- Daily Usage -->
@@ -336,11 +349,11 @@
             <option value="keyword">Block Keyword</option>
         </select>
         <button id="add-site">Lock Domain</button>
+        <!-- Kept as a spacer so the popup keeps its shape; feedback now goes
+             through ui.js so it looks the same on every page. -->
         <div id="message" style="height:18px;font-size:0.76rem;margin-top:2px;"></div>
     </div>
 
-    <!-- Reset -->
-    <button id="reset-btn">Reset Streak</button>
 
     <!-- Footer -->
     <footer class="copyright">
@@ -349,6 +362,7 @@
 
 </div>
 
+<script src="ui.js"></script>
 <script src="streaks.js"></script>
 <script src="pomodoro-entry.js"></script>
 </body>

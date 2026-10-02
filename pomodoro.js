@@ -495,9 +495,12 @@
         if (e.key === 'Enter') addTask();
     });
 
-    clearDone.addEventListener('click', function () {
-        send({ action: 'todoClearDone' }).then(applyTasks);
-    });
+    // Deleting finished tasks is not undoable, so the button asks twice.
+    if (window.WB) {
+        WB.armButton(clearDone, 'Click again to delete', function () {
+            send({ action: 'todoClearDone' }).then(applyTasks);
+        });
+    }
 
     settingsToggle.addEventListener('click', function () {
         settingsPanel.hidden = !settingsPanel.hidden;
@@ -520,10 +523,11 @@
             focusBlocksTimed: el('s-strict').checked
         };
         act('pomodoroSaveSettings', { settings: payload }).then(function (res) {
-            if (!res || !res.success) return;
+            if (!res || !res.success) { if (window.WB) WB.error('Could not save the settings'); return; }
             renderSettings();
-            settingsCaret.textContent = '\u2713 saved';
-            setTimeout(function () { settingsCaret.textContent = '\u25BE'; }, 1500);
+            // The caret used to turn into "saved" for 1.5s, which took the
+            // collapse control away and said it in a second visual language.
+            if (window.WB) WB.ok('Timer settings saved');
         });
     });
 

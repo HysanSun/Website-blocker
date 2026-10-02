@@ -4,16 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings</title>
+    <link rel="stylesheet" href="ui.css">
     <style>
         :root {
             --primary-color: #2c3e50;
-            --accent-color: #e67e22;
-            --success-color: #27ae60;
-            --danger-color: #e74c3c;
+            --accent-color: #b85c00;
+            --success-color: #1e8449;
+            --danger-color: #c0392b;
             --bg-light: #f8f9fa;
             --bg-card: #ffffff;
             --border-color: #ecf0f1;
-            --text-muted: #95a5a6;
+            --text-muted: #5f6f78;
             --radius-sm: 8px;
             --radius-md: 12px;
             --radius-lg: 16px;
@@ -99,6 +100,10 @@
         }
         .badge-block { background: #fde8e8; color: var(--danger-color); }
         .badge-timed { background: #fef3e4; color: var(--accent-color); }
+        /* An exception is not a weaker block, it is the opposite of one, so it
+           gets its own colour instead of the red "Blocked" badge it used to
+           wear. */
+        .badge-exception { background: #e7f6ec; color: var(--success-color); }
 
         .rule-domain {
             font-weight: 600;
@@ -125,6 +130,42 @@
             color: white;
             border-color: var(--danger-color);
         }
+
+        .rule-edit-btn {
+            padding: 4px 12px;
+            border: 1px solid #ddd;
+            border-radius: var(--radius-sm);
+            background: white;
+            color: var(--primary-color);
+            font-size: 0.72rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .rule-edit-btn:hover {
+            border-color: var(--accent-color);
+            color: var(--accent-color);
+        }
+
+        /* --- Focus streak --- */
+        .card-note {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin: 0 0 12px;
+        }
+        .danger-btn {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--danger-color);
+            border-radius: var(--radius-sm);
+            background: white;
+            color: var(--danger-color);
+            font-weight: 600;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .danger-btn:hover { background: var(--danger-color); color: white; }
 
         /* --- Usage bar --- */
         .usage-row {
@@ -231,24 +272,24 @@
         #add-rule-btn:hover { opacity: 0.9; }
         #add-rule-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        /* --- Toast --- */
-        .toast {
-            position: fixed;
-            bottom: 24px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: var(--primary-color);
-            color: white;
-            padding: 10px 22px;
+        /* The Save and Cancel pair only takes two columns while a rule is
+           loaded into the form; on its own the button is still full width. */
+        #rule-buttons { display: flex; gap: 8px; }
+        #rule-buttons #add-rule-btn { flex: 1; width: auto; }
+        .cancel-btn {
+            padding: 11px 16px;
+            border: 1px solid #ddd;
             border-radius: var(--radius-sm);
-            font-size: 0.8rem;
-            z-index: 1000;
-            opacity: 0;
-            transition: opacity 0.3s;
-            pointer-events: none;
+            background: white;
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
         }
-        .toast.show { opacity: 1; }
-        .toast.error { background: var(--danger-color); }
+        .cancel-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
+
+        /* The toast itself lives in ui.css, shared with the popup and the
+           pomodoro window. */
     </style>
 </head>
 <body>
@@ -285,12 +326,21 @@
                 <input type="number" id="limit-input" value="30" min="1" max="1440">
                 <label for="limit-input">min</label>
             </div>
-            <button id="add-rule-btn">Add Rule</button>
+            <div id="rule-buttons">
+                <button id="add-rule-btn">Add Rule</button>
+                <button id="cancel-edit-btn" class="cancel-btn" hidden>Cancel</button>
+            </div>
+        </div>
+
+        <!-- Focus Streak -->
+        <div class="card">
+            <h2>Focus streak</h2>
+            <p class="card-note" id="streak-note"></p>
+            <button id="reset-btn" class="danger-btn">Reset streak to 0</button>
         </div>
     </div>
 
-    <div id="toast" class="toast"></div>
-
+    <script src="ui.js"></script>
     <script src="settings.js"></script>
 </body>
 </html>

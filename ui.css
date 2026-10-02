@@ -1,0 +1,31 @@
+/* ============================================================
+   ui.css - shared chrome for every page of the extension.
+
+   Only the toast lives here, so the same message looks identical on the
+   popup, the settings page and the pomodoro window. Colours are literals on
+   purpose: this file is shared, and the pages do not all define the same
+   custom properties.
+   ============================================================ */
+.wb-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%) translateY(6px);
+    max-width: 86vw;
+    padding: 9px 18px;
+    border-radius: 8px;
+    background: #2c3e50;
+    color: #ffffff;
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    line-height: 1.35;
+    text-align: center;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    z-index: 2147483000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s, transform 0.25s;
+}
+.wb-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.wb-toast.error { background: #c0392b; }
+.wb-toast.success { background: #1e8449; }
