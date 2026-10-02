@@ -111,7 +111,7 @@ the rules you wrote; it never touches the DOM or anything you type.
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE) &copy; 2026 Hysan Sun.
 
 ---
 
