@@ -32,6 +32,15 @@ const POMODORO_ALARM = 'pomodoroPhase';
 // 'this is a timed rule' (enforceTimeLimit, resetDailyLimits), so a pomodoro
 // rule caught by that filter would be silently dropped mid-session.
 const POMODORO_RULE_ID_OFFSET = 1500000;
+// Exception rules get their own band, below both of the others, so nothing that
+// filters on "id >= TIMED_RULE_ID_OFFSET" can sweep them up. The full ladder:
+// 1..N complete blocks, 1000000+ exceptions, 1500000+ timed rules pinned by a
+// focus session, 2000000+ timed rules that are over quota.
+const ALLOW_RULE_ID_OFFSET = 1000000;
+// The resource types every website rule covers, so the three places that build
+// a rule cannot drift apart.
+const RULE_RESOURCE_TYPES = ['main_frame', 'sub_frame', 'stylesheet', 'script',
+  'image', 'xmlhttprequest', 'other'];
 // A phase that expired longer ago than this is a stale transition (the machine
 // was asleep or shut down). Used ONLY to decide whether a system notification
 // is still worth showing - it must never affect crediting.
@@ -77,6 +86,74 @@ function migrateData() {
 // dies with "Rule with id 1 does not have a unique ID" - and because the run
 // that lands last wins, a stale rule set could survive instead (timed sites
 // staying blocked after the focus session that pinned them had ended).
+//
+// A rule whose value starts with '!' is an exception: "never block this host",
+// covering the host itself and everything under it. Blocking a domain is
+// deliberately wider than the domain (its urlFilter is `||host^`), which is
+// what makes "block baidu.com" also close pan.baidu.com - so an exception is how
+// you keep using one service without opening the whole site back up.
+//
+// Exceptions live in the same list the settings page already renders and can
+// delete, so they need no new UI: type `!pan.baidu.com` where you would type a
+// site to block.
+function isException(item) {
+  return !!(item && typeof item.val === 'string' && item.val.trim().charAt(0) === '!');
+}
+
+// 'https://*.pan.baidu.com/x' -> 'pan.baidu.com'
+function normalizeHost(value) {
+  return String(value == null ? '' : value).trim().toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/^\*\./, '')
+    .replace(/^\./, '');
+}
+
+// '!pan.baidu.com' -> 'pan.baidu.com'. Anything that is not marked as an
+// exception has no excepted host at all.
+function exceptionHost(item) {
+  const raw = String((item && item.val) || '').trim();
+  return raw.charAt(0) === '!' ? normalizeHost(raw.slice(1)) : '';
+}
+
+// A value covers its host and every subdomain of it, and nothing else: 'x.com'
+// matches x.com and a.x.com, never notx.com. Same scope as the DNR urlFilter
+// `||x.com^`, so the two layers agree. Keep this identical to the copy in
+// content.js.
+function hostMatches(host, value) {
+  const h = String(host || '').toLowerCase();
+  const d = normalizeHost(value);
+  return !!d && (h === d || h.endsWith('.' + d));
+}
+
+// The urlFilter for "this host and every subdomain of it, and nothing else".
+// `||host^` matches the apex as well; the older `*://*.host/*` form did not - a
+// rule for `baidu.com` never blocked `baidu.com` itself, only its subdomains -
+// and it stops at a host boundary, so `baidu.com.evil.com` stays reachable where
+// `*://*.baidu.com/*` would have caught it too. Verified against Chromium with
+// declarativeNetRequestFeedback / testMatchOutcome; do not fold it back.
+function hostUrlFilter(value) {
+  const host = normalizeHost(value);
+  return host ? `||${host}^` : '';
+}
+
+function hostOfUrl(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch (e) {
+    return '';
+  }
+}
+
+function isExceptedHost(items, host) {
+  for (const item of items || []) {
+    if (isException(item) && hostMatches(host, exceptionHost(item))) return true;
+  }
+  return false;
+}
+
+// Every write to the dynamic rule set goes through this one queue, so the
+// helpers above it are pure and can be called from anywhere.
 let dnrWriteQueue = Promise.resolve();
 function withDnrLock(run) {
   const queued = dnrWriteQueue.then(run, run);
@@ -173,11 +250,19 @@ async function syncAllRulesNow() {
     const rulesToAdd = [];
     let ruleIndex = 0;
 
+    const uniqueExceptions = [];
+    for (const item of items) {
+      if (!isException(item)) continue;
+      const host = exceptionHost(item);
+      if (host && uniqueExceptions.indexOf(host) === -1) uniqueExceptions.push(host);
+    }
+
     items.forEach((item, idx) => {
+      if (isException(item)) return;   // exceptions become allow rules below
       if (item.type === 'block') {
         // Complete block — always register DNR rule
         const filterPattern = (item.mode === 'website')
-          ? `*://*.${item.val}/*`
+          ? hostUrlFilter(item.val)
           : `*://*/*?*q=*${item.val}*`;
 
         rulesToAdd.push({
@@ -186,7 +271,7 @@ async function syncAllRulesNow() {
           action: { type: 'redirect', redirect: { extensionPath: '/blockpage.html' } },
           condition: {
             urlFilter: filterPattern,
-            resourceTypes: ['main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'xmlhttprequest', 'other']
+            resourceTypes: RULE_RESOURCE_TYPES
           }
         });
         ruleIndex++;
@@ -199,7 +284,7 @@ async function syncAllRulesNow() {
         const limitMs = (item.limitMin || 30) * 60 * 1000;
 
         if (strictNow || usedToday >= limitMs) {
-          const filterPattern = `*://*.${item.val}/*`;
+          const filterPattern = hostUrlFilter(item.val);
           rulesToAdd.push({
             // Separate band per reason: it keeps these rules out of the
             // enforceTimeLimit / resetDailyLimits filter, which owns quota rules.
@@ -208,12 +293,24 @@ async function syncAllRulesNow() {
             action: { type: 'redirect', redirect: { extensionPath: '/blockpage.html' } },
             condition: {
               urlFilter: filterPattern,
-              resourceTypes: ['main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'xmlhttprequest', 'other']
+              resourceTypes: RULE_RESOURCE_TYPES
             }
           });
         }
       }
     });
+
+    // One allow rule per exception host, at a priority no redirect rule uses.
+    // The highest-priority matching rule decides the request, and an allow beats
+    // a redirect, so pan.baidu.com stays reachable while baidu.com stays closed.
+    for (const host of uniqueExceptions) {
+      rulesToAdd.push({
+        id: ALLOW_RULE_ID_OFFSET + rulesToAdd.length,
+        priority: 100,
+        action: { type: 'allow' },
+        condition: { urlFilter: hostUrlFilter(host), resourceTypes: RULE_RESOURCE_TYPES }
+      });
+    }
 
     // Clears the previous set and installs the new one in one atomic update,
     // including when rulesToAdd is empty.
@@ -271,14 +368,18 @@ async function trackActiveTab() {
     // 3c. Check if active tab matches any timed rule
     const { [STORAGE_KEYS.BLOCKED_ITEMS]: storedItems } = await chrome.storage.sync.get([STORAGE_KEYS.BLOCKED_ITEMS]);
     const items = storedItems || [];
-    const urlLower = tab.url.toLowerCase();
-
     let matchedDomain = null;
     let matchedLimitMin = 30;
 
+    // An excepted host is not counted and not enforced: the user said not to
+    // apply their rules here, and that has to include the daily quota.
+    const tabHost = hostOfUrl(tab.url);
+    const tabExcepted = isExceptedHost(items, tabHost);
+
     for (const item of items) {
-      if (item.type === 'timed' && item.mode === 'website') {
-        if (urlLower.includes(item.val)) {
+      if (isException(item)) continue;
+      if (!tabExcepted && item.type === 'timed' && item.mode === 'website') {
+        if (hostMatches(tabHost, item.val)) {
           matchedDomain = item.val;
           matchedLimitMin = item.limitMin || 30;
           break;
@@ -335,7 +436,7 @@ function enforceTimeLimit(domain, limitMin) {
 async function redirectActiveTabAway(domain) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (tab && tab.url && tab.url.toLowerCase().includes(domain)) {
+    if (tab && tab.url && hostMatches(hostOfUrl(tab.url), domain)) {
       await chrome.tabs.update(tab.id, { url: chrome.runtime.getURL('blockpage.html') });
     }
   } catch (e) {
