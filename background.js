@@ -20,6 +20,7 @@ const STORAGE_KEYS = {
   POMODORO_SETTINGS: 'pomodoroSettings',
   USAGE_CLOCK: 'usageClock',
   TEMP_UNLOCKS: 'tempUnlocks',
+  STATS: 'stats',
   TODO: 'todo'
 };
 // Liveness marker in storage.session: it rides out service-worker suspension
@@ -45,6 +46,9 @@ const TEMP_UNLOCK_ID_OFFSET = 3000000;
 const TEMP_UNLOCK_ALARM = 'tempUnlock';
 const TEMP_UNLOCK_MAX_MIN = 240;
 const TEMP_UNLOCK_DEFAULT_MIN = 30;
+// The trend keeps 90 days and then forgets, which is long enough to see a
+// habit and short enough that the record cannot grow without bound.
+const STATS_RETENTION_DAYS = 90;
 // The resource types every website rule covers, so the three places that build
 // a rule cannot drift apart.
 const RULE_RESOURCE_TYPES = ['main_frame', 'sub_frame', 'stylesheet', 'script',
@@ -612,6 +616,13 @@ async function trackActiveTab() {
       if (prevMs < limitMs && newMs >= limitMs) {
         console.log('[Blocker] Time limit reached for', settledDomain);
         await enforceTimeLimit(settledDomain, settledLimitMin);
+        // One hit per crossing, not one per minute spent over the line: this is
+        // the honest count of "how often did you run out here today".
+        try {
+          await recordBlockStats(settledDomain);
+        } catch (err) {
+          console.debug('[Blocker] Stats skipped:', err.message);
+        }
       }
 
       // 3e. Warning at 5 minutes remaining
@@ -706,6 +717,80 @@ async function resetDailyLimitsNow() {
   await syncAllRulesNow();
 
   console.log('[Blocker] Daily reset complete.');
+}
+
+// ============================================================
+// 4b. HISTORY / TRENDS
+//
+// A day-by-day record that outlives the two-day window dailyUsage keeps. It is
+// read-only from the UI's point of view and lives in storage.local on purpose:
+// it grows every minute the user is on a timed site, and storage.sync has an
+// 8KB-per-item / 100KB-total / 1800-writes-per-hour budget that this would blow
+// through, taking the user's actual settings down with it.
+// ============================================================
+function statsDayKey(when) {
+  const d = (when instanceof Date) ? when
+    : (typeof when === 'number') ? new Date(when) : new Date();
+  const pad = (n) => (n < 10 ? '0' : '') + n;
+  // Sorts as a string, which is all the pruning below needs.
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+function emptyStats() {
+  return { v: 1, days: {} };
+}
+
+async function getStats() {
+  const res = await chrome.storage.local.get([STORAGE_KEYS.STATS]);
+  const stats = res[STORAGE_KEYS.STATS];
+  if (!stats || typeof stats !== 'object' || !stats.days || typeof stats.days !== 'object') {
+    return emptyStats();
+  }
+  return stats;
+}
+
+function statsDay(stats, key) {
+  const day = stats.days[key];
+  if (!day || typeof day !== 'object') {
+    stats.days[key] = { focusMs: 0, sessions: 0, blocks: {} };
+  } else {
+    day.focusMs = Number(day.focusMs) || 0;
+    day.sessions = Number(day.sessions) || 0;
+    if (!day.blocks || typeof day.blocks !== 'object') day.blocks = {};
+  }
+  return stats.days[key];
+}
+
+function pruneStats(stats, when) {
+  const cutoff = new Date(when === undefined ? Date.now() : when);
+  cutoff.setDate(cutoff.getDate() - (STATS_RETENTION_DAYS - 1));
+  const cutKey = statsDayKey(cutoff);
+  for (const key of Object.keys(stats.days)) {
+    if (key < cutKey) delete stats.days[key];
+  }
+}
+
+// Every stats write goes through here, so pruning cannot be forgotten on one
+// path and remembered on another.
+async function saveStats(stats, when) {
+  pruneStats(stats, when);
+  await chrome.storage.local.set({ [STORAGE_KEYS.STATS]: stats });
+}
+
+async function recordFocusStats(focusMs, sessions, when) {
+  const stats = await getStats();
+  const day = statsDay(stats, statsDayKey(when));
+  day.focusMs += focusMs;
+  day.sessions += sessions;
+  await saveStats(stats, when);
+}
+
+async function recordBlockStats(host, when) {
+  if (!host) return;
+  const stats = await getStats();
+  const day = statsDay(stats, statsDayKey(when));
+  day.blocks[host] = (day.blocks[host] || 0) + 1;
+  await saveStats(stats, when);
 }
 
 // Calculate ms until next 00:01
@@ -1052,6 +1137,13 @@ async function pomodoroEnterNextPhase(state, settings, now, credit) {
       state.focusToday += 1;
       state.focusMsToday += settings.focusMin * 60 * 1000;
       await creditTaskFocus(run ? run.taskId : state.taskId, settings.focusMin);
+      // The trend is a record, not a rule: a write that fails must not stop the
+      // session from being credited or the next phase from starting.
+      try {
+        await recordFocusStats(settings.focusMin * 60 * 1000, 1);
+      } catch (err) {
+        console.debug('[Blocker] Stats skipped:', err.message);
+      }
       if (run) run.focusDone = (run.focusDone || 0) + 1;
     }
     const cycles = Math.max(1, settings.cyclesUntilLongBreak);
@@ -1569,6 +1661,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'resetDaily': {
         await resetDailyLimits();
         sendResponse({ success: true });
+        break;
+      }
+      case 'getStats': {
+        const stats = await getStats();
+        sendResponse({ success: true, days: stats.days });
         break;
       }
       case 'getTempUnlocks': {

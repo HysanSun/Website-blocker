@@ -48,6 +48,12 @@
     var planAllN = el('plan-all-n');
     var planStart = el('plan-start');
     var planCancel = el('plan-cancel');
+    var trendToggle = el('trend-toggle');
+    var trendPanel = el('trend-panel');
+    var trendCaret = el('trend-caret');
+    var trendTotal = el('trend-total');
+    var trendBars = el('trend-bars');
+    var trendBlocks = el('trend-blocks');
 
     var state = null;
     var settings = null;
@@ -334,6 +340,90 @@
     }
 
     // ------------------------------------------------------------
+    // Trend (a local-only, 90-day day-by-day record)
+    // ------------------------------------------------------------
+    function dayKeyOf(date) {
+        var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+        return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+    }
+
+    function durationText(ms) {
+        var mins = Math.round(ms / 60000);
+        if (mins < 60) return mins + 'm';
+        var h = Math.floor(mins / 60);
+        var m = mins % 60;
+        return h + 'h' + (m ? ' ' + m + 'm' : '');
+    }
+
+    function renderTrend(days) {
+        if (!trendBars) return;
+        var DAY_INITIAL = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+        var week = [];
+        var i;
+        for (i = 6; i >= 0; i--) {
+            var d = new Date();
+            d.setDate(d.getDate() - i);
+            var key = dayKeyOf(d);
+            var rec = days[key] || {};
+            week.push({
+                key: key,
+                label: DAY_INITIAL[d.getDay()],
+                focusMs: rec.focusMs || 0,
+                sessions: rec.sessions || 0,
+                blocks: rec.blocks || {},
+                today: i === 0
+            });
+        }
+
+        var totalMs = 0;
+        var totalSessions = 0;
+        var blockCounts = {};
+        week.forEach(function (day) {
+            totalMs += day.focusMs;
+            totalSessions += day.sessions;
+            for (var host in day.blocks) {
+                if (!Object.prototype.hasOwnProperty.call(day.blocks, host)) continue;
+                blockCounts[host] = (blockCounts[host] || 0) + day.blocks[host];
+            }
+        });
+
+        trendTotal.textContent = totalSessions
+            ? 'Last 7 days: ' + totalSessions + ' session' + (totalSessions === 1 ? '' : 's') +
+              ' \u00b7 ' + durationText(totalMs) + ' focused'
+            : 'Last 7 days: nothing recorded yet.';
+
+        var max = 1;
+        week.forEach(function (day) { if (day.focusMs > max) max = day.focusMs; });
+        var html = '';
+        week.forEach(function (day) {
+            var pct = Math.round((day.focusMs / max) * 100);
+            html += '<div class="trend-col' + (day.today ? ' today' : '') + '" title="' +
+                day.key + ': ' + (day.sessions || 0) + ' session(s)">';
+            html += '<div class="bar' + (day.focusMs ? '' : ' empty') + '" style="height:' +
+                (day.focusMs ? Math.max(4, pct) : 2) + '%"></div>';
+            html += '<div class="day">' + day.label + '</div></div>';
+        });
+        trendBars.innerHTML = html;
+
+        var worst = null;
+        for (var host in blockCounts) {
+            if (!Object.prototype.hasOwnProperty.call(blockCounts, host)) continue;
+            if (!worst || blockCounts[host] > blockCounts[worst]) worst = host;
+        }
+        trendBlocks.textContent = worst
+            ? 'Ran out of time most often on ' + worst + ' (' + blockCounts[worst] + ' time' +
+              (blockCounts[worst] === 1 ? '' : 's') + ').'
+            : '';
+    }
+
+    function refreshTrend() {
+        return send({ action: 'getStats' }).then(function (res) {
+            if (res && res.success) renderTrend(res.days || {});
+            return res;
+        });
+    }
+
+    // ------------------------------------------------------------
     // Data flow
     // ------------------------------------------------------------
     function applyStatus(res) {
@@ -366,7 +456,8 @@
         return send({ action: 'pomodoroGetState' })
             .then(applyStatus)
             .then(function () { return send({ action: 'todoGet' }); })
-            .then(applyTasks);
+            .then(applyTasks)
+            .then(refreshTrend);
     }
 
     function act(action, extra) {
@@ -513,6 +604,11 @@
         manualCaret.textContent = manualPanel.hidden ? '\u25BE' : '\u25B4';
     });
 
+    trendToggle.addEventListener('click', function () {
+        trendPanel.hidden = !trendPanel.hidden;
+        trendCaret.textContent = trendPanel.hidden ? '\u25BE' : '\u25B4';
+    });
+
     saveSettingsBtn.addEventListener('click', function () {
         var payload = {
             focusMin: parseInt(el('s-focus').value, 10),
@@ -559,7 +655,7 @@
         send({ action: 'pomodoroTick' }).then(function (res) {
             tickInFlight = false;
             applyStatus(res);
-            return send({ action: 'todoGet' }).then(applyTasks);
+            return send({ action: 'todoGet' }).then(applyTasks).then(refreshTrend);
         });
     }, 1000);
 

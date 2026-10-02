@@ -401,6 +401,19 @@ def main():
                   and "Timer settings" in manual and "Skip" in manual,
                   "%d chars" % len(manual))
 
+            # 8b. The trend card: collapsed until asked for, seven days wide, and
+            # it has to answer at all (the page is the only consumer of getStats).
+            check("the trend starts collapsed",
+                  page2.eval_on_selector("#trend-panel", "e=>e.hidden") is True)
+            page2.click("#trend-toggle")
+            page2.wait_for_timeout(400)
+            cols = page2.eval_on_selector_all("#trend-bars .trend-col", "els=>els.length")
+            total = page2.eval_on_selector("#trend-total", "e=>e.textContent")
+            check("the trend opens with a seven-day bar chart",
+                  page2.eval_on_selector("#trend-panel", "e=>e.hidden") is False
+                  and cols == 7 and "Last 7 days" in total,
+                  "%d bars, %s" % (cols, total))
+
             # 9. How wide a rule is. A value covers its host and every subdomain
             # of it and nothing else, and a '!host' rule opens a hole in a wider
             # block - which is the baidu.com / pan.baidu.com complaint: blocking

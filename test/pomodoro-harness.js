@@ -259,6 +259,13 @@ function seed(o) {
 
 function snap(s) { return JSON.parse(JSON.stringify(s.local.pomodoro)); }
 
+// Same local-day key the worker uses for its trend record.
+function statsKey(t) {
+  const d = new Date(t);
+  const pad = (n) => (n < 10 ? '0' : '') + n;
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
 // --- scenarios ------------------------------------------------------------
 const results = [];
 function check(name, cond, detail) {
@@ -1327,6 +1334,67 @@ const scenarios = [
         ' allowPrio=' + (allow ? allow.priority : 'none') +
         ' listed=' + (r.listed && r.listed.tempUnlocks ? r.listed.tempUnlocks.length : '?') +
         ' afterRevoke=' + r.allowAfterRevoke];
+    },
+  },
+  {
+    name: 'P36 a completed focus is written into the trend, and the trend is pruned',
+    run: async () => {
+      NOW = T0;
+      const s = seed({ pomodoro: { phase: 'focus', endAt: T0 + 25 * MIN, startedAt: T0 } });
+      // A record from long ago, well outside the retention window.
+      s.local.stats = { v: 1, days: { '2000-01-01': { focusMs: 1, sessions: 1, blocks: {} } } };
+      const life = runLifetime(s);
+      await life.settle();
+      advance(25 * MIN + 5000);
+      life.fireAlarm('pomodoroPhase');
+      await drain();
+      const days = (s.local.stats && s.local.stats.days) || {};
+      const today = days[statsKey(NOW)] || {};
+      return {
+        focusMs: today.focusMs || 0,
+        sessions: today.sessions || 0,
+        ancient: '2000-01-01' in days,
+      };
+    },
+    expect: (r) => {
+      const ok = r.focusMs === 25 * MIN && r.sessions === 1 && r.ancient === false;
+      return [ok, 'focusMs=' + r.focusMs + ' sessions=' + r.sessions +
+        ' keptAncientDay=' + r.ancient];
+    },
+  },
+  {
+    name: 'P37 running out of quota is counted once per crossing, not once per minute',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        rules: [{ val: 'testsite.invalid', mode: 'website', type: 'timed', limitMin: 1 }],
+      });
+      const life = runLifetime(s, { activeTab: { id: 3, url: 'https://testsite.invalid/feed' } });
+      await life.settle();
+      // The first tick opens the interval without charging anything, so the
+      // crossing happens on the second one.
+      life.fireAlarm('tracking');
+      await drain();
+      advance(70 * 1000);
+      life.fireAlarm('tracking');
+      await drain();
+      const afterCrossing = ((s.local.stats.days[statsKey(NOW)] || {}).blocks || {})['testsite.invalid'] || 0;
+      // Three more minutes sitting on the blocked site: still one crossing.
+      advance(60 * 1000);
+      life.fireAlarm('tracking');
+      await drain();
+      advance(60 * 1000);
+      life.fireAlarm('tracking');
+      await drain();
+      advance(60 * 1000);
+      life.fireAlarm('tracking');
+      await drain();
+      const afterMore = ((s.local.stats.days[statsKey(NOW)] || {}).blocks || {})['testsite.invalid'] || 0;
+      return { afterCrossing, afterMore };
+    },
+    expect: (r) => {
+      const ok = r.afterCrossing === 1 && r.afterMore === 1;
+      return [ok, 'atCrossing=' + r.afterCrossing + ' threeMinutesLater=' + r.afterMore];
     },
   },
 ];

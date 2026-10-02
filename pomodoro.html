@@ -267,6 +267,44 @@
             font-size: 0.72rem;
         }
 
+        /* --- Trend --- */
+        .trend-total {
+            font-size: 0.86rem;
+            font-weight: 600;
+            margin: 0 0 10px;
+        }
+        .trend-bars {
+            display: flex;
+            align-items: flex-end;
+            gap: 6px;
+            height: 74px;
+            margin-bottom: 8px;
+        }
+        .trend-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            align-items: center;
+            height: 100%;
+            gap: 3px;
+        }
+        .trend-col .bar {
+            width: 100%;
+            border-radius: 3px 3px 0 0;
+            background: var(--accent-color);
+            min-height: 2px;
+            opacity: 0.85;
+        }
+        .trend-col.today .bar { opacity: 1; }
+        .trend-col .bar.empty { background: var(--border-color); }
+        .trend-col .day {
+            font-size: 0.58rem;
+            color: var(--text-muted);
+            letter-spacing: 0.5px;
+        }
+        .trend-blocks { font-size: 0.74rem; color: var(--text-muted); margin: 0; }
+
         /* --- Planned runs --- */
         #run-line {
             text-align: center;
@@ -396,6 +434,15 @@
 
     <!-- Settings -->
     <div class="card">
+        <h2 id="trend-toggle">Trend <span id="trend-caret">&#9662;</span></h2>
+        <div id="trend-panel" hidden>
+            <p class="trend-total" id="trend-total"></p>
+            <div class="trend-bars" id="trend-bars"></div>
+            <p class="trend-blocks" id="trend-blocks"></p>
+        </div>
+    </div>
+
+    <div class="card">
         <h2 id="settings-toggle">Timer settings <span id="settings-caret">&#9662;</span></h2>
         <div id="settings-panel" hidden>
             <div class="settings-grid">
@@ -495,6 +542,10 @@
 
             <h3>数据与统计</h3>
             <ul>
+                <li><b>Trend</b> 是这台机器上的本地记录：每天记住「跑完几段、共多少分钟、在哪几个站上
+                    把额度用完了」，保留 <b>90 天</b>，更早的自动丢掉。它<b>不参与任何判定</b>
+                    （既不封站也不发通知），也<b>不会同步到你的账号</b> —— 按小时增长的这类数据写进
+                    同步存储会把设置一起写坏。导出备份时会一起带走。</li>
                 <li>计时状态和任务存在扩展本地（关浏览器不丢），设置跟着账号同步。</li>
                 <li>「今日 N 段 / M 分钟」每天零点清零；循环进度和任务不受影响，未完成任务跨天保留。</li>
                 <li>做完的任务进 <b>Done</b> 区，永不自动删除，只有 <b>Clear completed</b> 才删。</li>
