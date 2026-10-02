@@ -1,0 +1,18 @@
+{
+  "extName": {
+    "message": "Website Blocker",
+    "description": "The extension name in the toolbar and on chrome://extensions."
+  },
+  "extDescription": {
+    "message": "Strict focus tool: a pomodoro timer, a to-do list, and site blocking that backs both up. Everything stays on your machine.",
+    "description": "Shown in the Chrome Web Store and on chrome://extensions."
+  },
+  "cmdOpenPomodoro": {
+    "message": "Open the pomodoro window",
+    "description": "Keyboard shortcut description."
+  },
+  "cmdToggleTimer": {
+    "message": "Pause or resume the running timer",
+    "description": "Keyboard shortcut description."
+  }
+}

@@ -529,6 +529,20 @@
                 <li>放行只按域名生效：<code>pan.baidu.com</code> 的放行不会连带放开 <code>baidu.com</code>。</li>
             </ul>
 
+            <h3>隐私与权限</h3>
+            <ul>
+                <li>这个扩展<b>不联网</b>：代码里没有 <code>fetch</code> / <code>XMLHttpRequest</code> /
+                    <code>sendBeacon</code>，没有统计、没有账号、没有第三方服务。提醒音是本地合成的，
+                    不下载音频。仓库根目录的 <code>PRIVACY.md</code> 是完整声明。</li>
+                <li>它<b>不看网页内容</b>：只拿 <code>location.hostname</code> 和当前标签页的网址，
+                    去和你自己写的规则比对，不读 DOM、不读输入框；读不了密码也读不了聊天记录。</li>
+                <li>为什么权限看着吓人：<code>&lt;all_urls&gt;</code> 是因为拦截必须在你访问之前
+                    看到网址，而它没法预先知道你会封哪些站；<code>tabs</code> 是为了把时间记在
+                    <b>你正在看的那个站</b>上。两条都只用来比对你自己写的规则。</li>
+                <li>规则和番茄钟设置走 Chrome 账号同步（<code>storage.sync</code>）；
+                    用量、任务、趋势、临时放行只存在本机，删扩展即随之删除 —— 所以先导出。</li>
+            </ul>
+
             <h3>快捷键、提醒音与备份</h3>
             <ul>
                 <li><b>Alt+Shift+P</b> 打开这个窗口，<b>Alt+Shift+S</b> 暂停 / 继续当前计时。

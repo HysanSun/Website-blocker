@@ -674,7 +674,8 @@ function showWarningNotification(domain, remainingMin) {
   try {
     chrome.notifications.create(QUOTA_WARNING_NOTIFY_ID, {
       type: 'basic',
-      iconUrl: chrome.runtime.getURL('icon.png'),
+      // A notification icon has to be square; icon.png is the wide wordmark.
+      iconUrl: chrome.runtime.getURL('icon128.png'),
       title: 'Time limit almost up',
       message: domain + ' has ' + remainingMin + ' min left today.'
     });
@@ -1074,7 +1075,7 @@ function notifyPomodoroPhase(fromPhase, toPhase, lateMs, settings) {
   try {
     chrome.notifications.create(POMODORO_NOTIFY_ID, {
       type: 'basic',
-      iconUrl: chrome.runtime.getURL('icon.png'),
+      iconUrl: chrome.runtime.getURL('icon128.png'),
       title: title,
       message: message
     });

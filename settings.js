@@ -271,12 +271,14 @@ function loadAndRender() {
                 html += '<span class="rule-limit">Always</span>';
             }
 
+            html += '<span class="rule-actions">';
             html += '<button class="rule-edit-btn" data-val="' + escapeHtml(rule.val) + '">Edit</button>';
             if (!exception) {
-                html += '<button class="rule-unlock-btn" data-val="' + escapeHtml(rule.val) + '">Unlock ' +
-                    TEMP_UNLOCK_MIN + ' min</button>';
+                html += '<button class="rule-unlock-btn" data-val="' + escapeHtml(rule.val) +
+                    '" title="Allow this site for ' + TEMP_UNLOCK_MIN + ' minutes">Unlock</button>';
             }
             html += '<button class="rule-delete-btn" data-val="' + escapeHtml(rule.val) + '">Remove</button>';
+            html += '</span>';
 
             if (winText) {
                 html += '<div class="rule-window">' + (winOff ? 'Outside its hours — not enforced now. ' : 'During ') +

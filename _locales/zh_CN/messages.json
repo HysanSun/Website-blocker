@@ -1,0 +1,18 @@
+{
+  "extName": {
+    "message": "Website Blocker",
+    "description": "工具栏和 chrome://extensions 上的扩展名。"
+  },
+  "extDescription": {
+    "message": "严格的专注工具：番茄钟、待办清单，以及为两者撑腰的网站拦截。数据全部留在本机。",
+    "description": "应用商店与 chrome://extensions 上的简介。"
+  },
+  "cmdOpenPomodoro": {
+    "message": "打开番茄钟窗口",
+    "description": "快捷键说明。"
+  },
+  "cmdToggleTimer": {
+    "message": "暂停或继续正在跑的计时",
+    "description": "快捷键说明。"
+  }
+}
