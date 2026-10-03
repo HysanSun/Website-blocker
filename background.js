@@ -1749,6 +1749,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: true, tasks: (await todoUpdate(message.id, message.text)).tasks });
         break;
       }
+      case 'todoPlan': {
+        // Planning on its own: the estimate is set without starting anything, so
+        // a task can be sized up the moment it is written down. setTaskPlan owns
+        // the "never below the units already credited" rule.
+        const planned = await setTaskPlan(message.id, message.units);
+        sendResponse({ success: !!planned, tasks: (await getTodo()).tasks });
+        break;
+      }
       case 'todoToggle': {
         sendResponse({ success: true, tasks: (await todoToggle(message.id)).tasks });
         break;

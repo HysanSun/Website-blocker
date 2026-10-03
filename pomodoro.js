@@ -47,6 +47,7 @@
     var planHint = el('plan-hint');
     var planAll = el('plan-all');
     var planAllN = el('plan-all-n');
+    var planSave = el('plan-save');
     var planStart = el('plan-start');
     var planCancel = el('plan-cancel');
     var trendToggle = el('trend-toggle');
@@ -387,24 +388,56 @@
             (raised ? ' A plan below that is kept at ' + credited + '.' : '');
     }
 
-    function openPlanDialog(taskId) {
+    // `forStart` is true only when the row's play button opened this: that
+    // action promises to begin a run, so it still needs an idle timer. Clicking
+    // the unit counter is a planning action, which has no such promise - the
+    // estimate can be set at any time, run or no run.
+    function openPlanDialog(taskId, forStart) {
         var task = taskById(taskId);
+        if (!task || !state) return;
+        var running = state.phase !== 'idle';
         // One timer at a time: starting a run replaces whatever is running, and
         // silently resetting a live session is never what the user meant.
-        if (!task || !state || state.phase !== 'idle') return;
+        if (forStart && running) {
+            if (window.WB) WB.toast('A run is already going \u2014 Stop it first');
+            return;
+        }
         planTaskId = taskId;
         var credited = task.pomodoros || 0;
         var planned = task.plannedUnits || 0;
         planTitle.textContent = task.text;
-        planSub.textContent = planned > 0
+        var sub = planned > 0
             ? 'Planned ' + planned + ' unit(s), ' + credited + ' credited.'
             : 'No estimate yet: how many units is this task worth?';
+        if (running) sub += ' The timer is busy, so this only changes the estimate.';
+        planSub.textContent = sub;
+        // Hides "Units this session", All and Start focus while a run is live.
+        planModal.classList.toggle('no-start', running);
         planEstimate.value = planned > 0 ? Math.max(planned, credited + 1) : Math.max(1, credited + 1);
         planUnits.value = planCap(task, parseInt(planEstimate.value, 10));
         syncPlanDialog();
         planModal.hidden = false;
-        planUnits.focus();
-        planUnits.select();
+        // Land on the field the user came for: the estimate when planning, the
+        // session count when starting.
+        var field = forStart ? planUnits : planEstimate;
+        field.focus();
+        field.select();
+    }
+
+    function savePlan() {
+        if (!planTaskId) return;
+        var estimate = parseInt(planEstimate.value, 10);
+        if (!isFinite(estimate) || estimate < 1) estimate = 1;
+        var id = planTaskId;
+        closePlanDialog();
+        // The worker owns the rule that a plan never drops below the units
+        // already credited, so send the number and render what comes back
+        // instead of keeping a second copy of it here.
+        send({ action: 'todoPlan', id: id, units: estimate }).then(function (res) {
+            if (res && res.tasks) applyTasks(res);
+            if (!res || !res.success) { if (window.WB) WB.error('Could not save the plan'); return; }
+            if (window.WB) WB.ok('Plan saved');
+        });
     }
 
     function closePlanDialog() {
@@ -580,8 +613,10 @@
                     var target = e.target.closest ? e.target.closest('[data-act]') : null;
                     if (!target) return;
                     var act1 = target.getAttribute('data-act');
-                    if (act1 === 'play' || act1 === 'plan') {
-                        openPlanDialog(id);
+                    if (act1 === 'play') {
+                        openPlanDialog(id, true);
+                    } else if (act1 === 'plan') {
+                        openPlanDialog(id, false);
                     } else if (act1 === 'toggle') {
                         send({ action: 'todoToggle', id: id }).then(applyTasks);
                     } else if (act1 === 'up') {
@@ -630,6 +665,7 @@
         planUnits.value = planAllN.textContent;
         syncPlanDialog(planUnits);
     });
+    planSave.addEventListener('click', savePlan);
     planCancel.addEventListener('click', closePlanDialog);
     planModal.addEventListener('click', function (e) {
         if (e.target === planModal) closePlanDialog();

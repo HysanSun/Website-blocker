@@ -377,9 +377,9 @@
             font-size: 0.78rem;
             font-family: inherit;
         }
-        .modal-btns { display: flex; gap: 8px; margin-top: 14px; }
+        .modal-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
         .modal-btns button {
-            flex: 1;
+            flex: 1 1 0;
             padding: 8px 0;
             border: 1px solid #ddd;
             border-radius: var(--radius-sm);
@@ -391,11 +391,19 @@
         }
         .modal-btns button:hover { border-color: var(--accent-color); color: var(--accent-color); }
         .modal-btns button.primary {
+            /* Starting is the main thing this dialog does, so it gets its own
+               row and the secondary actions share the one under it. */
+            flex-basis: 100%;
+            order: -1;
             background: var(--success-color);
             border-color: var(--success-color);
             color: #fff;
         }
         .modal-btns button.primary:hover { color: #fff; opacity: 0.9; }
+        /* "Units this session" and Start focus only mean something when a run
+           can actually begin. While the timer is busy the dialog is a planner. */
+        #plan-modal.no-start .session-only,
+        #plan-modal.no-start #plan-start { display: none; }
 
         /* --- Print ---
            The page is the app; the paper should be the list. #print-sheet is
@@ -535,7 +543,9 @@
             <h3>三十秒上手</h3>
             <ul>
                 <li>在 <b>Tasks</b> 里输入任务，按 <b>Add</b>。</li>
-                <li>点任务行首的 <b>&#9654;</b>（或行尾的 <code>0/3 &#127813;</code>），弹出计划框。</li>
+                <li>点任务行尾的 <code>0/3 &#127813;</code>：<b>随时</b>改「这个任务预计几个单位」，
+                    按 <b>Save plan</b> 只存计划，<b>不会开始计时</b> —— 刚写下任务就能先估好。</li>
+                <li>点任务行首的 <b>&#9654;</b>：问「这次做几个单位」，然后开始计时。</li>
                 <li>填「这个任务预计几个单位」，点 <b>All</b> 或直接 <b>Start focus</b>。</li>
                 <li>跑满计划后系统提问：做完了按 <b>Yes, it's done</b> 归档；没做完按 <b>Not yet</b>
                     重新估时间。</li>
@@ -545,12 +555,15 @@
             <p>1 单位 = 1 段专注 + 紧跟它的那段休息，时长由上面的 <b>Timer settings</b> 决定
             （默认 25 + 5 分钟）。任务行尾的 <code>2/5</code> 读作「已记 2 单位 / 计划 5 单位」。</p>
 
-            <h3>计划框里的两个数字</h3>
+            <h3>计划框里的按钮</h3>
             <ul>
                 <li><b>Planned units (estimate)</b>：这个任务一共值几个单位，随时可改，但不会被
                 改到低于已经做完的那部分（否则「到达计划」这个提问就再也不会出现了）。</li>
                 <li><b>Units this session</b>：这次先做几个，上限是「还差几个到计划」；
                 <b>All</b> 一下填满。</li>
+                <li><b>Save plan</b>：只存上面的预计，不开计时器。计时中也能随时改 —— 这时
+                「Units this session」「All」「Start focus」会收起来，因为一次只能跑一段；
+                想开始就先 <b>Stop</b> 掉手上那段，再从 &#9654; 进。</li>
             </ul>
 
             <h3>计时中能做什么</h3>
@@ -652,12 +665,13 @@
             <label for="plan-estimate">Planned units (estimate)</label>
             <input type="number" id="plan-estimate" min="1" max="99" step="1">
 
-            <label for="plan-units">Units this session</label>
-            <input type="number" id="plan-units" min="1" max="99" step="1">
+            <label for="plan-units" class="session-only">Units this session</label>
+            <input type="number" id="plan-units" class="session-only" min="1" max="99" step="1">
         </div>
         <p class="hint" id="plan-hint"></p>
         <div class="modal-btns">
-            <button id="plan-all">All (<span id="plan-all-n">1</span>)</button>
+            <button id="plan-all" class="session-only">All (<span id="plan-all-n">1</span>)</button>
+            <button id="plan-save">Save plan</button>
             <button id="plan-start" class="primary">Start focus</button>
             <button id="plan-cancel">Cancel</button>
         </div>

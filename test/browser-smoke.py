@@ -207,6 +207,62 @@ def main():
             check("print media shows only the sheet",
                   media["sheet"] != "none" and media["app"] == "none", str(media))
 
+            # 3d. Planning is its own action: the unit counter opens the planner
+            # and Save plan writes the estimate without starting anything.
+            page.click("#task-list .task .meta")
+            page.wait_for_selector("#plan-modal:not([hidden])", timeout=5000)
+            check("the unit counter opens the planner",
+                  page.eval_on_selector("#plan-modal",
+                                        "e=>e.classList.contains('no-start')") is False)
+            page.fill("#plan-estimate", "5")
+            page.click("#plan-save")
+            page.wait_for_timeout(600)
+            planned = sw.evaluate("""async () => {
+                const t = (await chrome.storage.local.get(['todo'])).todo.tasks[0];
+                const p = (await chrome.storage.local.get(['pomodoro'])).pomodoro;
+                return JSON.stringify({planned: t.plannedUnits, phase: p.phase, taskId: p.taskId});
+            }""")
+            check("Save plan stores the estimate and starts nothing",
+                  '"planned":5' in planned.replace(" ", "")
+                  and '"phase":"idle"' in planned.replace(" ", ""), planned)
+            toast = page.eval_on_selector_all(".wb-toast", "els=>els.map(e=>e.textContent).join(' | ')")
+            check("saving a plan says so", "Plan saved" in toast, toast)
+
+            # ...and while a run is live it stays a planner: the start controls
+            # are gone, the estimate is still editable, and the timer is not
+            # touched. One run at a time is the whole point.
+            page.click("#task-list .task .play")
+            page.wait_for_selector("#plan-modal:not([hidden])", timeout=5000)
+            page.click("#plan-start")
+            page.wait_for_timeout(900)
+            page.click("#task-list .task .meta")
+            page.wait_for_selector("#plan-modal:not([hidden])", timeout=5000)
+            hidden_start = page.eval_on_selector("#plan-start", "e=>getComputedStyle(e).display")
+            hidden_units = page.eval_on_selector("#plan-units", "e=>getComputedStyle(e).display")
+            check("the planner hides the start controls during a run",
+                  hidden_start == "none" and hidden_units == "none",
+                  "start=%s units=%s" % (hidden_start, hidden_units))
+            page.fill("#plan-estimate", "4")
+            page.click("#plan-save")
+            page.wait_for_timeout(600)
+            mid = sw.evaluate("""async () => {
+                const t = (await chrome.storage.local.get(['todo'])).todo.tasks[0];
+                const p = (await chrome.storage.local.get(['pomodoro'])).pomodoro;
+                return JSON.stringify({planned: t.plannedUnits, phase: p.phase, live: p.endAt > 0});
+            }""")
+            check("a plan can be changed mid-run without touching the timer",
+                  '"planned":4' in mid.replace(" ", "") and '"phase":"focus"' in mid.replace(" ", "")
+                  and '"live":true' in mid.replace(" ", ""), mid)
+            # The play button still means "start", and it says why it cannot.
+            page.click("#task-list .task .play")
+            page.wait_for_timeout(400)
+            toast = page.eval_on_selector_all(".wb-toast", "els=>els.map(e=>e.textContent).join(' | ')")
+            check("the play button refuses a second run out loud",
+                  page.eval_on_selector("#plan-modal", "e=>e.hidden") is True
+                  and "already going" in toast, toast)
+            page.click("#stop-btn")
+            page.wait_for_timeout(800)
+
             # 4. Blocking: a DNR redirect must land on blockpage.html.
             #
             # The rule goes in whatever the network is doing - only the redirect

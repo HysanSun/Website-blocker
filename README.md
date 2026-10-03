@@ -28,9 +28,11 @@ network calls anywhere in the code — see [PRIVACY.md](PRIVACY.md).
 - **A pomodoro timer** with long breaks, auto-start, an optional chime, and a
   badge that shows the remaining minutes.
 - **A to-do list** where a task carries an estimate in *units* (one unit = one
-  focus session plus the break after it). Start a task, say how many units to
-  spend, and the run keeps going until the count is spent — then it asks whether
-  the task is actually done.
+  focus session plus the break after it). The estimate is the task's own
+  business: click the unit counter on the row and *Save plan* writes it down
+  whenever you like, without starting anything. Start the task when you are
+  ready, say how many units to spend, and the run keeps going until the count is
+  spent — then it asks whether the task is actually done.
 - **Print the list.** One button on the Tasks card opens the system print
   dialog with the checklist and nothing else: tick boxes to fill in by hand,
   open tasks in order, finished ones crossed out at the end. "Save as PDF" is

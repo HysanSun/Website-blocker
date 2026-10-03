@@ -1401,6 +1401,50 @@ const scenarios = [
       return [ok, 'atCrossing=' + r.afterCrossing + ' threeMinutesLater=' + r.afterMore];
     },
   },
+  {
+    name: 'P38 todoPlan sizes a task up without starting a timer',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        tasks: [{ id: 't1', text: 'Write the report', done: false, createdAt: T0, doneAt: 0,
+          pomodoros: 0, focusMs: 0, plannedUnits: 0 }],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      // 3.6: the estimate is a count of units, so it is rounded, not truncated.
+      const res = await life.sendMessage({ action: 'todoPlan', id: 't1', units: 3.6 });
+      return { s, res, p: snap(s) };
+    },
+    expect: (r) => {
+      const t = r.s.local.todo.tasks[0];
+      const ok = !!r.res && r.res.success === true && t.plannedUnits === 4 &&
+        r.p.phase === 'idle' && r.p.endAt === 0 && r.p.taskId === null;
+      return [ok, 'plannedUnits=' + t.plannedUnits + ' phase=' + r.p.phase +
+        ' endAt=' + r.p.endAt + ' taskId=' + r.p.taskId];
+    },
+  },
+  {
+    name: 'P39 todoPlan cannot plan below the credited units, and a missing task is a clean no',
+    run: async () => {
+      NOW = T0;
+      const s = seed({
+        tasks: [{ id: 't1', text: 'Half done', done: false, createdAt: T0, doneAt: 0,
+          pomodoros: 5, focusMs: 5 * 25 * MIN, plannedUnits: 5 }],
+      });
+      const life = runLifetime(s);
+      await life.settle();
+      const low = await life.sendMessage({ action: 'todoPlan', id: 't1', units: 2 });
+      const missing = await life.sendMessage({ action: 'todoPlan', id: 'nope', units: 3 });
+      return { s, low, missing };
+    },
+    expect: (r) => {
+      const t = r.s.local.todo.tasks[0];
+      const ok = t.plannedUnits === 5 && !!r.low && r.low.success === true &&
+        !!r.missing && r.missing.success === false;
+      return [ok, 'plannedUnits=' + t.plannedUnits + ' low=' + (r.low && r.low.success) +
+        ' missing=' + (r.missing && r.missing.success)];
+    },
+  },
 ];
 (async () => {
   for (const sc of scenarios) {
