@@ -204,6 +204,23 @@
         }
         #clear-done:hover { border-color: var(--danger-color); }
 
+        /* Printing belongs to the Tasks heading itself: the heading is already
+           a flex row, so the button rides on its right edge and the card keeps
+           the layout it had. */
+        #print-tasks {
+            padding: 3px 10px;
+            font-size: 0.66rem;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            border: 1px solid #ddd;
+            background: #fff;
+            border-radius: var(--radius-sm);
+            color: var(--text-muted);
+            cursor: pointer;
+            font-family: inherit;
+        }
+        #print-tasks:hover { border-color: var(--accent-color); color: var(--accent-color); }
+
         /* --- Settings --- */
         #settings-toggle { cursor: pointer; }
         .settings-grid {
@@ -379,6 +396,49 @@
             color: #fff;
         }
         .modal-btns button.primary:hover { color: #fff; opacity: 0.9; }
+
+        /* --- Print ---
+           The page is the app; the paper should be the list. #print-sheet is
+           built by pomodoro.js when Print is pressed and is the only thing the
+           print job sees. Everything here is scoped to body.printing so a plain
+           Ctrl+P without pressing the button still prints the page as it looks
+           (and never an empty, half-built sheet). */
+        #print-sheet { display: none; }
+        @media print {
+            @page { margin: 16mm; }
+            body.printing { background: #fff; padding: 0; margin: 0; }
+            body.printing .container, body.printing .modal { display: none !important; }
+            body.printing #print-sheet {
+                display: block;
+                color: #000;
+                font-size: 12pt;
+                line-height: 1.4;
+            }
+            body.printing #print-sheet h1 { font-size: 18pt; margin: 0 0 2pt; }
+            body.printing #print-sheet h2 {
+                font-size: 10pt;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                color: #555;
+                margin: 14pt 0 4pt;
+            }
+            body.printing #print-sheet .print-meta { font-size: 9pt; color: #666; margin: 0 0 12pt; }
+            body.printing #print-sheet .print-empty { font-size: 11pt; color: #666; }
+            body.printing #print-sheet ul { list-style: none; margin: 0; padding: 0; }
+            body.printing #print-sheet li {
+                display: flex;
+                align-items: baseline;
+                gap: 6pt;
+                padding: 3pt 0;
+                border-bottom: 1px dotted #ccc;
+                break-inside: avoid;
+            }
+            body.printing #print-sheet li .box { font-size: 12pt; }
+            body.printing #print-sheet li .text { flex: 1; }
+            body.printing #print-sheet li .meta { font-size: 9pt; color: #666; white-space: nowrap; }
+            body.printing #print-sheet li.done .text { text-decoration: line-through; color: #777; }
+            body.printing #print-sheet .print-foot { margin-top: 16pt; font-size: 8pt; color: #999; }
+        }
     </style>
 </head>
 <body>
@@ -417,7 +477,7 @@
 
     <!-- Tasks -->
     <div class="card">
-        <h2>Tasks</h2>
+        <h2>Tasks <button id="print-tasks" title="Print this to-do list">Print</button></h2>
         <div class="add-row">
             <input type="text" id="task-input" placeholder="What are you working on?" maxlength="200">
             <button id="task-add">Add</button>
@@ -528,6 +588,15 @@
                     这一点是有意的：临时的、你自己按的放行，比"删扩展"体面。</li>
                 <li>放行只按域名生效：<code>pan.baidu.com</code> 的放行不会连带放开 <code>baidu.com</code>。</li>
             </ul>
+
+            <h3>打印清单</h3>
+            <p><b>Tasks</b> 标题右边的 <b>Print</b> 只打印清单本身：打开系统打印对话框，页面上其它
+            卡片（计时器、Done、趋势、设置、这份说明书）都不会出现在纸上，纸面一行一个任务，
+            前面的方框可以手写打勾。进行中的任务按清单顺序排，已完成的任务带删除线排在最后的
+            <b>Completed</b> 里。想存成 PDF，在打印对话框的「目标打印机」里选 <b>Save as PDF</b>
+            即可 —— 扩展本身不生成文件，也不联网。</p>
+            <p>清单里没有任务时按钮只会提示一句，不会打出空白页；不按这个按钮直接 Ctrl+P，
+            打印的仍是屏幕上这一页的原本样子。</p>
 
             <h3>隐私与权限</h3>
             <ul>

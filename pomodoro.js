@@ -24,6 +24,7 @@
     var taskList = el('task-list');
     var doneList = el('done-list');
     var clearDone = el('clear-done');
+    var printBtn = el('print-tasks');
     var settingsToggle = el('settings-toggle');
     var settingsPanel = el('settings-panel');
     var settingsCaret = el('settings-caret');
@@ -197,12 +198,9 @@
 
         html += '<span class="text" data-act="rename" title="Double-click to rename">' +
             escapeHtml(t.text) + '</span>';
-        var credited = t.pomodoros || 0;
-        var planned = t.plannedUnits || 0;
         html += '<span class="meta"' + (isDone ? '' : ' data-act="plan"') +
             ' title="' + (isDone ? '' : 'Click to plan this task') + '">' +
-            credited + (planned > 0 ? '/' + planned : '') + ' \uD83C\uDF45 \u00B7 ' +
-            Math.round((t.focusMs || 0) / 60000) + ' min</span>';
+            unitText(t) + '</span>';
 
         if (!isDone) {
             html += '<button data-act="up"' + (index === 0 ? ' disabled' : '') + '>&#9650;</button>';
@@ -235,6 +233,81 @@
         }
 
         bindTaskEvents();
+    }
+
+    // ------------------------------------------------------------
+    // Printing the list
+    //
+    // The page is the app; the paper should be the list. The button builds a
+    // plain sheet (#print-sheet) and the print rules in pomodoro.html hide
+    // everything else for the duration of the job. No worker round-trip: this
+    // is a local view of state the page already has.
+    // ------------------------------------------------------------
+    function unitText(t) {
+        var credited = t.pomodoros || 0;
+        var planned = t.plannedUnits || 0;
+        return credited + (planned > 0 ? '/' + planned : '') + ' \uD83C\uDF45 \u00B7 ' +
+            Math.round((t.focusMs || 0) / 60000) + ' min';
+    }
+
+    function printRow(t, isDone) {
+        return '<li' + (isDone ? ' class="done"' : '') + '>' +
+            '<span class="box">' + (isDone ? '\u2611' : '\u2610') + '</span>' +
+            '<span class="text">' + escapeHtml(t.text) + '</span>' +
+            '<span class="meta">' + unitText(t) + '</span></li>';
+    }
+
+    function buildPrintSheet() {
+        var sheet = el('print-sheet');
+        if (!sheet) {
+            sheet = document.createElement('div');
+            sheet.id = 'print-sheet';
+            document.body.appendChild(sheet);
+        }
+
+        var active = tasks.filter(function (t) { return t && !t.done; });
+        var done = tasks.filter(function (t) { return t && t.done; })
+            .sort(function (a, b) { return (b.doneAt || 0) - (a.doneAt || 0); });
+
+        // Active tasks keep the order the user arranged; finished ones read as
+        // a record of the day, so they come last and stay crossed out.
+        var html = '<h1>To-do list</h1>';
+        html += '<p class="print-meta">' + new Date().toLocaleDateString() + ' \u00B7 ' +
+            active.length + ' open' + (done.length ? ' \u00B7 ' + done.length + ' done' : '') +
+            '</p>';
+        if (active.length) {
+            html += '<ul>' + active.map(function (t) { return printRow(t, false); }).join('') + '</ul>';
+        } else {
+            html += '<p class="print-empty">Nothing open.</p>';
+        }
+        if (done.length) {
+            html += '<h2>Completed</h2><ul>' +
+                done.map(function (t) { return printRow(t, true); }).join('') + '</ul>';
+        }
+        html += '<p class="print-foot">Website Blocker \u00B7 Pomodoro</p>';
+
+        sheet.innerHTML = html;
+        return sheet;
+    }
+
+    function printTasks() {
+        if (tasks.length === 0) {
+            if (window.WB) WB.toast('Nothing to print yet');
+            return;
+        }
+        buildPrintSheet();
+        // The class is what the print rules key off, so a normal Ctrl+P (which
+        // never sets it) still prints the page exactly as it looks on screen.
+        document.body.classList.add('printing');
+        // window.print() blocks until the dialog closes, so this is the normal
+        // way back; afterprint covers the builds that return early instead.
+        var restore = function () {
+            document.body.classList.remove('printing');
+            window.removeEventListener('afterprint', restore);
+        };
+        window.addEventListener('afterprint', restore);
+        window.print();
+        restore();
     }
 
     function renderSettings() {
@@ -583,6 +656,7 @@
     });
 
     taskAdd.addEventListener('click', addTask);
+    printBtn.addEventListener('click', printTasks);
     taskInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') addTask();
     });

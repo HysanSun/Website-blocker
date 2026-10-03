@@ -174,6 +174,39 @@ def main():
             page.click("#stop-btn")
             page.wait_for_timeout(800)
 
+            # 3c. Printing the list: the button builds a plain sheet, and the
+            # print rules reduce the page to that sheet. window.print itself is
+            # stubbed - the real dialog would block the headed browser.
+            check("the Tasks card offers a print button",
+                  page.eval_on_selector_all("#print-tasks", "els=>els.length") == 1)
+            page.evaluate("""() => {
+                window.__prints = 0;
+                window.__classAtPrint = false;
+                window.print = () => {
+                    window.__prints++;
+                    window.__classAtPrint = document.body.classList.contains('printing');
+                };
+            }""")
+            page.click("#print-tasks")
+            page.wait_for_timeout(300)
+            prints = page.evaluate("() => [window.__prints, window.__classAtPrint]")
+            sheet = page.eval_on_selector("#print-sheet", "e=>e.textContent")
+            check("printing builds a sheet out of the list",
+                  prints == [1, True] and "smoke task" in sheet and "0/3" in sheet,
+                  "prints=%s sheet=%s" % (prints, sheet[:110]))
+            check("the app is back after printing",
+                  page.eval_on_selector("body", "e=>e.classList.contains('printing')") is False)
+            page.evaluate("() => document.body.classList.add('printing')")
+            page.emulate_media(media="print")
+            page.wait_for_timeout(200)
+            media = page.evaluate("""() => ({
+                sheet: getComputedStyle(document.getElementById('print-sheet')).display,
+                app: getComputedStyle(document.querySelector('.container')).display})""")
+            page.emulate_media(media="screen")
+            page.evaluate("() => document.body.classList.remove('printing')")
+            check("print media shows only the sheet",
+                  media["sheet"] != "none" and media["app"] == "none", str(media))
+
             # 4. Blocking: a DNR redirect must land on blockpage.html.
             #
             # The rule goes in whatever the network is doing - only the redirect

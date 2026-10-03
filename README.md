@@ -31,6 +31,12 @@ network calls anywhere in the code — see [PRIVACY.md](PRIVACY.md).
   focus session plus the break after it). Start a task, say how many units to
   spend, and the run keeps going until the count is spent — then it asks whether
   the task is actually done.
+- **Print the list.** One button on the Tasks card opens the system print
+  dialog with the checklist and nothing else: tick boxes to fill in by hand,
+  open tasks in order, finished ones crossed out at the end. "Save as PDF" is
+  the export path; the extension writes no files itself.
+
+  <img src="docs/screenshots/print-list.png" alt="The printed sheet: open tasks with empty check boxes, then the completed ones crossed out" width="420">
 - **A 90-day trend**, local to the machine: sessions, minutes, and which site
   you ran out of time on most often.
 - **A backup**, because the product's own rule is that removing the extension
