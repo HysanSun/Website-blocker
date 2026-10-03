@@ -179,6 +179,9 @@ def main():
             # stubbed - the real dialog would block the headed browser.
             check("the Tasks card offers a print button",
                   page.eval_on_selector_all("#print-tasks", "els=>els.length") == 1)
+            meta = page.eval_on_selector("#task-list .task .meta", "e=>e.textContent")
+            check("the row counter carries the estimate in minutes too",
+                  "/3" in meta and "/75 min" in meta, meta)
             page.evaluate("""() => {
                 window.__prints = 0;
                 window.__classAtPrint = false;
@@ -194,6 +197,16 @@ def main():
             check("printing builds a sheet out of the list",
                   prints == [1, True] and "smoke task" in sheet and "0/3" in sheet,
                   "prints=%s sheet=%s" % (prints, sheet[:110]))
+            boxes = page.evaluate("""() => {
+                const units = document.querySelectorAll('#print-sheet .units-line .unit');
+                return [units.length,
+                        Array.prototype.filter.call(units, u => u.classList.contains('on')).length,
+                        (document.querySelector('#print-sheet .unit-label') || {}).textContent];
+            }""")
+            check("the sheet gives every planned unit its own box to tick",
+                  boxes[0] == 3 and boxes[1] == 0 and boxes[2] == "0/3 units", str(boxes))
+            check("the sheet writes each task's estimated finish time",
+                  "left \u00b7 done by" in sheet, sheet[:150])
             check("the app is back after printing",
                   page.eval_on_selector("body", "e=>e.classList.contains('printing')") is False)
             page.evaluate("() => document.body.classList.add('printing')")
@@ -206,6 +219,26 @@ def main():
             page.evaluate("() => document.body.classList.remove('printing')")
             check("print media shows only the sheet",
                   media["sheet"] != "none" and media["app"] == "none", str(media))
+
+            # ...and units already credited print pre-ticked: the paper starts
+            # where the app is, not at zero.
+            page.evaluate("""() => new Promise(res => chrome.storage.local.get(['todo'], t => {
+                const todo = t.todo;
+                todo.tasks[0].pomodoros = 2;
+                todo.tasks[0].focusMs = 2 * 25 * 60000;
+                chrome.storage.local.set({ todo: todo }, res);
+            }))""")
+            page.reload()
+            page.wait_for_timeout(900)
+            page.evaluate("() => { window.print = () => {}; }")
+            page.click("#print-tasks")
+            page.wait_for_timeout(300)
+            ticked = page.evaluate("""() => {
+                const units = document.querySelectorAll('#print-sheet .units-line .unit');
+                return [units.length,
+                        Array.prototype.filter.call(units, u => u.classList.contains('on')).length];
+            }""")
+            check("credited units print already ticked", ticked == [3, 2], str(ticked))
 
             # 3d. Planning is its own action: the unit counter opens the planner
             # and Save plan writes the estimate without starting anything.

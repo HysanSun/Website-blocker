@@ -125,6 +125,40 @@
         return null;
     }
 
+    // One unit is one focus session plus the break after it - minus the trailing
+    // one: a task is finished when its last focus ends, nobody takes that break
+    // on the way out.
+    function unitPlanMs(units) {
+        if (!settings || units <= 0) return 0;
+        return (units * settings.focusMin + (units - 1) * settings.shortBreakMin) * 60000;
+    }
+
+    function leftUnits(t) {
+        return Math.max(0, ((t && t.plannedUnits) || 0) - ((t && t.pomodoros) || 0));
+    }
+
+    function clockAt(ms) {
+        var d = new Date(ms);
+        var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+        return pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+
+    // When each active task would be finished if the user started now and worked
+    // down the list. A wall-clock promise needs an anchor, and "now" is the only
+    // honest one - so it is recomputed on every render, never stored.
+    function finishTimes(active) {
+        var out = {};
+        var cursor = Date.now();
+        active.forEach(function (t) {
+            var left = leftUnits(t);
+            if (!left) return;
+            cursor += unitPlanMs(left);
+            out[t.id] = cursor;
+            cursor += (settings ? settings.shortBreakMin : 5) * 60000;
+        });
+        return out;
+    }
+
     // ------------------------------------------------------------
     // Render
     // ------------------------------------------------------------
@@ -186,7 +220,7 @@
             Math.round(state.focusMsToday / 60000) + ' min';
     }
 
-    function taskRow(t, index, total, isDone) {
+    function taskRow(t, index, total, isDone, finishAt) {
         var active = !isDone && state && state.taskId === t.id && state.phase !== 'idle';
         var html = '<div class="task' + (active ? ' active' : '') + '" data-id="' + t.id + '">';
 
@@ -199,9 +233,27 @@
 
         html += '<span class="text" data-act="rename" title="Double-click to rename">' +
             escapeHtml(t.text) + '</span>';
+        // The row is too narrow for the whole forecast, so the counter carries
+        // the plan and the tooltip spells out what it means in wall-clock time.
+        var metaTitle = '';
+        if (!isDone) {
+            var plannedForRow = t.plannedUnits || 0;
+            metaTitle = 'Click to plan this task';
+            if (plannedForRow > 0) {
+                metaTitle = 'Planned ' + plannedForRow + ' unit(s) \u2248 ' +
+                    durationText(unitPlanMs(plannedForRow));
+                var leftForRow = leftUnits(t);
+                if (leftForRow > 0) {
+                    metaTitle += ' \u00B7 ' + durationText(unitPlanMs(leftForRow)) + ' left';
+                    if (finishAt) metaTitle += ', done by ' + clockAt(finishAt);
+                } else {
+                    metaTitle += ' \u00B7 that plan is reached';
+                }
+                metaTitle += '. Click to change it.';
+            }
+        }
         html += '<span class="meta"' + (isDone ? '' : ' data-act="plan"') +
-            ' title="' + (isDone ? '' : 'Click to plan this task') + '">' +
-            unitText(t) + '</span>';
+            ' title="' + metaTitle + '">' + unitText(t) + '</span>';
 
         if (!isDone) {
             html += '<button data-act="up"' + (index === 0 ? ' disabled' : '') + '>&#9650;</button>';
@@ -217,11 +269,12 @@
         var done = tasks.filter(function (t) { return t && t.done; })
             .sort(function (a, b) { return (b.doneAt || 0) - (a.doneAt || 0); });
 
+        var finishAt = finishTimes(active);
         if (active.length === 0) {
             taskList.innerHTML = '<div class="empty">No tasks yet. Add one and press play to focus on it.</div>';
         } else {
             taskList.innerHTML = active.map(function (t, i) {
-                return taskRow(t, i, active.length, false);
+                return taskRow(t, i, active.length, false, finishAt[t.id]);
             }).join('');
         }
 
@@ -244,18 +297,56 @@
     // everything else for the duration of the job. No worker round-trip: this
     // is a local view of state the page already has.
     // ------------------------------------------------------------
+    // "2/3 🍅 · 50/75 min" - units and minutes both read credited/planned, so the
+    // estimate the user typed in is visible on the row without a second badge.
     function unitText(t) {
         var credited = t.pomodoros || 0;
         var planned = t.plannedUnits || 0;
-        return credited + (planned > 0 ? '/' + planned : '') + ' \uD83C\uDF45 \u00B7 ' +
-            Math.round((t.focusMs || 0) / 60000) + ' min';
+        var text = credited + (planned > 0 ? '/' + planned : '') + ' \uD83C\uDF45 \u00B7 ' +
+            Math.round((t.focusMs || 0) / 60000);
+        if (planned > 0) text += '/' + planned * (settings ? settings.focusMin : 25);
+        return text + ' min';
     }
 
-    function printRow(t, isDone) {
-        return '<li' + (isDone ? ' class="done"' : '') + '>' +
+    // One printed box per planned unit: the paper twin of the 🍅 counter, so a
+    // unit that is actually finished gets ticked off by hand. Units already
+    // credited are printed pre-ticked - the paper starts where the app is.
+    function unitBoxes(t) {
+        var planned = t.plannedUnits || 0;
+        var credited = t.pomodoros || 0;
+        var html = '';
+        for (var i = 0; i < planned; i++) {
+            var on = i < credited;
+            html += '<span class="unit' + (on ? ' on' : '') + '">' +
+                (on ? '\u2611' : '\u2610') + '</span>';
+        }
+        return html;
+    }
+
+    function printEstimate(t, finishAt) {
+        var planned = t.plannedUnits || 0;
+        if (planned <= 0) return 'no estimate';
+        var left = leftUnits(t);
+        if (!left) return 'plan reached';
+        return durationText(unitPlanMs(left)) + ' left' +
+            (finishAt ? ' \u00B7 done by ' + clockAt(finishAt) : '');
+    }
+
+    function printRow(t, isDone, finishAt) {
+        var planned = t.plannedUnits || 0;
+        var credited = t.pomodoros || 0;
+        var est = isDone
+            ? (planned > 0 ? credited + '/' + planned + ' units' : '')
+            : printEstimate(t, finishAt);
+        var html = '<li' + (isDone ? ' class="done"' : '') + '><div class="row">' +
             '<span class="box">' + (isDone ? '\u2611' : '\u2610') + '</span>' +
             '<span class="text">' + escapeHtml(t.text) + '</span>' +
-            '<span class="meta">' + unitText(t) + '</span></li>';
+            '<span class="est">' + est + '</span></div>';
+        if (!isDone && planned > 0) {
+            html += '<div class="units-line">' + unitBoxes(t) +
+                '<span class="unit-label">' + credited + '/' + planned + ' units</span></div>';
+        }
+        return html + '</li>';
     }
 
     function buildPrintSheet() {
@@ -272,18 +363,23 @@
 
         // Active tasks keep the order the user arranged; finished ones read as
         // a record of the day, so they come last and stay crossed out.
+        var finishAt = finishTimes(active);
+        var meta = new Date().toLocaleDateString() + ' \u00B7 ' +
+            active.length + ' open' + (done.length ? ' \u00B7 ' + done.length + ' done' : '');
+        // Clock times are only as good as their anchor, so say what it is.
+        if (Object.keys(finishAt).length) meta += ' \u00B7 finish times assume you start now';
         var html = '<h1>To-do list</h1>';
-        html += '<p class="print-meta">' + new Date().toLocaleDateString() + ' \u00B7 ' +
-            active.length + ' open' + (done.length ? ' \u00B7 ' + done.length + ' done' : '') +
-            '</p>';
+        html += '<p class="print-meta">' + meta + '</p>';
         if (active.length) {
-            html += '<ul>' + active.map(function (t) { return printRow(t, false); }).join('') + '</ul>';
+            html += '<ul>' + active.map(function (t) {
+                return printRow(t, false, finishAt[t.id]);
+            }).join('') + '</ul>';
         } else {
             html += '<p class="print-empty">Nothing open.</p>';
         }
         if (done.length) {
             html += '<h2>Completed</h2><ul>' +
-                done.map(function (t) { return printRow(t, true); }).join('') + '</ul>';
+                done.map(function (t) { return printRow(t, true, 0); }).join('') + '</ul>';
         }
         html += '<p class="print-foot">Website Blocker \u00B7 Pomodoro</p>';
 

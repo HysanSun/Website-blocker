@@ -35,8 +35,11 @@ network calls anywhere in the code — see [PRIVACY.md](PRIVACY.md).
   spent — then it asks whether the task is actually done.
 - **Print the list.** One button on the Tasks card opens the system print
   dialog with the checklist and nothing else: tick boxes to fill in by hand,
-  open tasks in order, finished ones crossed out at the end. "Save as PDF" is
-  the export path; the extension writes no files itself.
+  open tasks in order, finished ones crossed out at the end. Every task carries
+  what its plan is worth in pomodoro time — how long is left, and the clock time
+  it would be done — plus one box per planned unit to tick as the units are
+  actually finished. "Save as PDF" is the export path; the extension writes no
+  files itself.
 
   <img src="docs/screenshots/print-list.png" alt="The printed sheet: open tasks with empty check boxes, then the completed ones crossed out" width="420">
 - **A 90-day trend**, local to the machine: sessions, minutes, and which site

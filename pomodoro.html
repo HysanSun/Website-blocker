@@ -434,16 +434,23 @@
             body.printing #print-sheet .print-empty { font-size: 11pt; color: #666; }
             body.printing #print-sheet ul { list-style: none; margin: 0; padding: 0; }
             body.printing #print-sheet li {
-                display: flex;
-                align-items: baseline;
-                gap: 6pt;
-                padding: 3pt 0;
+                padding: 4pt 0;
                 border-bottom: 1px dotted #ccc;
                 break-inside: avoid;
             }
+            body.printing #print-sheet li .row {
+                display: flex;
+                align-items: baseline;
+                gap: 6pt;
+            }
             body.printing #print-sheet li .box { font-size: 12pt; }
             body.printing #print-sheet li .text { flex: 1; }
-            body.printing #print-sheet li .meta { font-size: 9pt; color: #666; white-space: nowrap; }
+            body.printing #print-sheet li .est { font-size: 9pt; color: #666; white-space: nowrap; }
+            /* One box per planned unit, ticked off by hand as the units are
+               actually finished. */
+            body.printing #print-sheet .units-line { margin: 2pt 0 0 18pt; font-size: 9pt; color: #666; }
+            body.printing #print-sheet .unit { font-size: 13pt; letter-spacing: 2pt; }
+            body.printing #print-sheet .unit-label { margin-left: 6pt; }
             body.printing #print-sheet li.done .text { text-decoration: line-through; color: #777; }
             body.printing #print-sheet .print-foot { margin-top: 16pt; font-size: 8pt; color: #999; }
         }
@@ -553,7 +560,12 @@
 
             <h3>「单位」是什么</h3>
             <p>1 单位 = 1 段专注 + 紧跟它的那段休息，时长由上面的 <b>Timer settings</b> 决定
-            （默认 25 + 5 分钟）。任务行尾的 <code>2/5</code> 读作「已记 2 单位 / 计划 5 单位」。</p>
+            （默认 25 + 5 分钟）。任务行尾的 <code>2/5 &#127813; · 50/125 min</code> 读作
+            「已记 2 单位 / 计划 5 单位 · 已专注 50 分钟 / 计划 125 分钟」，分钟数就是按番茄钟
+            时长换算出来的。</p>
+            <p>鼠标停在这一行上，它会说清楚这份计划换来多少时间：整件事大约多久、<b>还差多久</b>，
+            以及「现在就开始、按清单顺序往下做」的话大概<b>几点能做完</b>。这个钟点只在悬停时
+            现算、不落盘 —— 你晚一小时开工，它不会拿旧时间骗你。</p>
 
             <h3>计划框里的按钮</h3>
             <ul>
@@ -608,6 +620,10 @@
             前面的方框可以手写打勾。进行中的任务按清单顺序排，已完成的任务带删除线排在最后的
             <b>Completed</b> 里。想存成 PDF，在打印对话框的「目标打印机」里选 <b>Save as PDF</b>
             即可 —— 扩展本身不生成文件，也不联网。</p>
+            <p>每个任务右边写着它的预计完成时间：「还要多久 · 几点做完」，按番茄钟设置换算
+            （没设预计的任务显示 <b>no estimate</b>）。任务下面那一排方框 = 这个任务计划的单位数，
+            <b>做完一个单位就手写勾掉一个</b>；app 里已经记账的那几个会预先打勾，纸上是从当前
+            进度接着画，不用从头补。</p>
             <p>清单里没有任务时按钮只会提示一句，不会打出空白页；不按这个按钮直接 Ctrl+P，
             打印的仍是屏幕上这一页的原本样子。</p>
 
